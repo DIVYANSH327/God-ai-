@@ -1,0 +1,31 @@
+[Unit]
+Description=GOD SENTINEL v0.8 Authorized Micro-Agent
+Documentation=https://github.com/ai-god/sentinel
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=god-sentinel
+Group=god-sentinel
+ExecStart=/usr/bin/python3 /opt/god-sentinel/god_sentinel_agent.py --controller https://YOUR_GOD_CONTROLLER_URL --state-dir /var/lib/god-sentinel
+Restart=on-failure
+RestartSec=10
+
+# Least-privilege hardening (No remote shell, read-only filesystem, strict resource caps)
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ReadWritePaths=/var/lib/god-sentinel
+CapabilityBoundingSet=
+AmbientCapabilities=
+MemoryMax=64M
+CPUQuota=5%
+TasksMax=16
+
+[Install]
+WantedBy=multi-user.target

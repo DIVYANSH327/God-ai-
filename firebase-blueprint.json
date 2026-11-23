@@ -1,0 +1,362 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User-isolated command center configuration, non-PII identity display metadata, execution mode, emergency stop state, and granular capability approvals.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID of the owner."
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "Display name shown in the command center."
+        },
+        "photoURL": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 1024,
+          "description": "Optional avatar URL from Google Sign-In."
+        },
+        "executionMode": {
+          "type": "string",
+          "enum": ["cloud", "local", "hybrid"],
+          "maxLength": 16,
+          "description": "Configured inference routing mode."
+        },
+        "emergencyStop": {
+          "type": "boolean",
+          "description": "Global kill-switch halting active AI streams and future tool execution."
+        },
+        "allowWebResearch": {
+          "type": "boolean",
+          "description": "Approval gate for outbound public web research capability."
+        },
+        "allowFileAnalysis": {
+          "type": "boolean",
+          "description": "Approval gate for user-uploaded document analysis."
+        },
+        "allowLocalBridge": {
+          "type": "boolean",
+          "description": "Approval gate for outbound mTLS/WSS local node pairing."
+        },
+        "allowAutomationQueue": {
+          "type": "boolean",
+          "description": "Approval gate for scheduled workflow execution."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Immutable server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of most recent update."
+        }
+      },
+      "required": [
+        "uid",
+        "displayName",
+        "photoURL",
+        "executionMode",
+        "emergencyStop",
+        "allowWebResearch",
+        "allowFileAnalysis",
+        "allowLocalBridge",
+        "allowAutomationQueue",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "PrivateAccount": {
+      "title": "PrivateAccount",
+      "description": "Isolated PII record storing the authenticated user's verified email address separately from operational profile configuration.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "minLength": 3,
+          "maxLength": 320
+        },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "createdAt", "updatedAt"]
+    },
+    "Conversation": {
+      "title": "Conversation",
+      "description": "User-isolated AI GOD conversation thread metadata.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "lastIntent": { "type": "string", "enum": ["chat", "research", "coding", "vision", "security", "automation"], "maxLength": 24 },
+        "lastMessagePreview": { "type": "string", "minLength": 0, "maxLength": 300 },
+        "messageCount": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "userId", "title", "lastIntent", "lastMessagePreview", "messageCount", "createdAt", "updatedAt"]
+    },
+    "Message": {
+      "title": "Message",
+      "description": "Individual user or GOD Core assistant message inside a conversation thread.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "conversationId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "role": { "type": "string", "enum": ["user", "assistant"], "maxLength": 16 },
+        "content": { "type": "string", "minLength": 1, "maxLength": 32000 },
+        "intent": { "type": "string", "enum": ["chat", "research", "coding", "vision", "security", "automation"], "maxLength": 24 },
+        "agentModuleNote": { "type": "string", "minLength": 0, "maxLength": 400 },
+        "modelUsed": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "conversationId", "userId", "role", "content", "intent", "agentModuleNote", "modelUsed", "createdAt"]
+    },
+    "TaskRecord": {
+      "title": "TaskRecord",
+      "description": "User-isolated operational task tracked inside the AI GOD command center.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "category": { "type": "string", "enum": ["chat", "research", "coding", "vision", "security", "automation"], "maxLength": 24 },
+        "status": { "type": "string", "enum": ["queued", "in_progress", "completed", "archived"], "maxLength": 24 },
+        "priority": { "type": "string", "enum": ["low", "medium", "high"], "maxLength": 16 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "userId", "title", "category", "status", "priority", "createdAt", "updatedAt"]
+    },
+    "AuditEvent": {
+      "title": "AuditEvent",
+      "description": "Immutable, append-only security and command activity audit record isolated per user.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "action": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "category": { "type": "string", "enum": ["auth", "chat", "security", "settings", "memory", "task", "network", "research", "knowledge", "behaviour"], "maxLength": 24 },
+        "severity": { "type": "string", "enum": ["info", "warning", "critical"], "maxLength": 16 },
+        "summary": { "type": "string", "minLength": 1, "maxLength": 320 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "userId", "action", "category", "severity", "summary", "createdAt"]
+    },
+    "NetworkAsset": {
+      "title": "NetworkAsset",
+      "description": "Authorized network inventory item with passive DNS metadata and flow telemetry counters.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "hostname": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "ipRange": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "authorizedScope": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "assetType": { "type": "string", "enum": ["gateway", "workstation", "server", "sensor", "kali_node", "windows_node"], "maxLength": 24 },
+        "status": { "type": "string", "enum": ["nominal", "degraded", "anomalous", "isolated"], "maxLength": 24 },
+        "dnsQueriesPerMin": { "type": "number" },
+        "nxdomainRatio": { "type": "number" },
+        "outboundMbps": { "type": "number" },
+        "baselineMbps": { "type": "number" },
+        "anomalyScore": { "type": "number" },
+        "threatMatch": { "type": "string", "minLength": 0, "maxLength": 240 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "userId", "hostname", "ipRange", "authorizedScope", "assetType", "status", "dnsQueriesPerMin", "nxdomainRatio", "outboundMbps", "baselineMbps", "anomalyScore", "threatMatch", "createdAt", "updatedAt"]
+    },
+    "ResearchReport": {
+      "title": "ResearchReport",
+      "description": "Grounded public internet research report with verifiable citations, facts, predictions, and confidence score.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "query": { "type": "string", "minLength": 1, "maxLength": 400 },
+        "summary": { "type": "string", "minLength": 1, "maxLength": 16000 },
+        "facts": { "type": "array" },
+        "predictions": { "type": "array" },
+        "confidenceScore": { "type": "number" },
+        "sources": { "type": "array" },
+        "scheduleCadence": { "type": "string", "enum": ["manual", "daily", "weekly"], "maxLength": 16 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "userId", "query", "summary", "facts", "predictions", "confidenceScore", "sources", "scheduleCadence", "createdAt"]
+    },
+    "KnowledgeNode": {
+      "title": "KnowledgeNode",
+      "description": "Knowledge Graph entity storing structured claims, relationships, source attribution, and confidence score.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "label": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "entityType": { "type": "string", "enum": ["concept", "organization", "technology", "asset", "threat", "protocol", "vulnerability", "framework", "infrastructure"], "maxLength": 24 },
+        "claim": { "type": "string", "minLength": 1, "maxLength": 600 },
+        "sourceTitle": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "sourceUri": { "type": "string", "minLength": 0, "maxLength": 1024 },
+        "confidenceScore": { "type": "number" },
+        "relations": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "userId", "label", "entityType", "claim", "sourceTitle", "sourceUri", "confidenceScore", "relations", "createdAt", "updatedAt"]
+    },
+    "BehaviourInsight": {
+      "title": "BehaviourInsight",
+      "description": "Behaviour Engine analytical finding separating verified facts from predictions with calibrated confidence.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 180 },
+        "domain": { "type": "string", "enum": ["network", "internet", "hybrid"], "maxLength": 16 },
+        "severity": { "type": "string", "enum": ["info", "warning", "critical"], "maxLength": 16 },
+        "confidenceScore": { "type": "number" },
+        "facts": { "type": "array" },
+        "predictions": { "type": "array" },
+        "explanation": { "type": "string", "minLength": 1, "maxLength": 2000 },
+        "sourceRefs": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "userId", "title", "domain", "severity", "confidenceScore", "facts", "predictions", "explanation", "sourceRefs", "createdAt"]
+    },
+    "TechAnalysis": {
+      "title": "TechAnalysis",
+      "description": "GRI v0.5 public Frontend, Backend, or Server technology analysis grounded in public HTML/HTTP headers, DNS, and Certificate Transparency metadata.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "target": { "type": "string", "minLength": 1, "maxLength": 240 },
+        "category": { "type": "string", "enum": ["frontend", "backend", "server"], "maxLength": 16 },
+        "title": { "type": "string", "minLength": 1, "maxLength": 180 },
+        "summary": { "type": "string", "minLength": 1, "maxLength": 6000 },
+        "detectedTechnologies": { "type": "array" },
+        "securityHeaders": { "type": "array" },
+        "dnsSummary": { "type": "array" },
+        "certSummary": { "type": "array" },
+        "sources": { "type": "array" },
+        "confidenceScore": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "userId", "target", "category", "title", "summary", "detectedTechnologies", "securityHeaders", "dnsSummary", "certSummary", "sources", "confidenceScore", "createdAt"]
+    },
+    "CveAdvisory": {
+      "title": "CveAdvisory",
+      "description": "GRI v0.5 public vulnerability intelligence record correlated with NVD CVE, CISA KEV, OWASP mapping, and defensive mitigations.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "cveId": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "vendorProduct": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "severity": { "type": "string", "enum": ["critical", "high", "medium", "low", "unknown"], "maxLength": 16 },
+        "cvssScore": { "type": "number" },
+        "cisaKev": { "type": "boolean" },
+        "owaspCategory": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "affectedVersions": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "mitigation": { "type": "string", "minLength": 1, "maxLength": 2000 },
+        "sourceUri": { "type": "string", "minLength": 0, "maxLength": 1024 },
+        "publishedDate": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "userId", "cveId", "title", "vendorProduct", "severity", "cvssScore", "cisaKev", "owaspCategory", "affectedVersions", "mitigation", "sourceUri", "publishedDate", "createdAt"]
+    },
+    "ResearchMonitor": {
+      "title": "ResearchMonitor",
+      "description": "GRI v0.5 continuous discovery monitor storing configurable cadence, rate limits, and source governance policies.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 140 },
+        "target": { "type": "string", "minLength": 1, "maxLength": 240 },
+        "monitorType": { "type": "string", "enum": ["web_topic", "website_tech", "server_dns", "cve_advisory"], "maxLength": 24 },
+        "cadence": { "type": "string", "enum": ["hourly", "daily", "weekly"], "maxLength": 16 },
+        "rateLimitPerHour": { "type": "integer" },
+        "sourcePolicy": { "type": "string", "enum": ["respect_robots_strict", "official_advisories_only", "public_docs_only"], "maxLength": 32 },
+        "enabled": { "type": "boolean" },
+        "lastRunSummary": { "type": "string", "minLength": 0, "maxLength": 300 },
+        "lastRunAtMs": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "userId", "name", "target", "monitorType", "cadence", "rateLimitPerHour", "sourcePolicy", "enabled", "lastRunSummary", "lastRunAtMs", "createdAt", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Root user workspace document containing non-PII command center settings and approval flags."
+    },
+    "/users/{userId}/private/{docId}": {
+      "schema": { "$ref": "#/entities/PrivateAccount" },
+      "description": "Split PII subcollection storing the user's verified email address."
+    },
+    "/users/{userId}/conversations/{conversationId}": {
+      "schema": { "$ref": "#/entities/Conversation" },
+      "description": "User-owned AI GOD conversation threads."
+    },
+    "/users/{userId}/conversations/{conversationId}/messages/{messageId}": {
+      "schema": { "$ref": "#/entities/Message" },
+      "description": "Append-only messages belonging to a specific user conversation."
+    },
+    "/users/{userId}/tasks/{taskId}": {
+      "schema": { "$ref": "#/entities/TaskRecord" },
+      "description": "User-owned tasks tracked in the command center."
+    },
+    "/users/{userId}/auditEvents/{eventId}": {
+      "schema": { "$ref": "#/entities/AuditEvent" },
+      "description": "Append-only, immutable security and activity audit records for the user."
+    },
+    "/users/{userId}/networkAssets/{assetId}": {
+      "schema": { "$ref": "#/entities/NetworkAsset" },
+      "description": "User-isolated authorized network assets and passive metadata counters."
+    },
+    "/users/{userId}/researchReports/{reportId}": {
+      "schema": { "$ref": "#/entities/ResearchReport" },
+      "description": "User-isolated grounded internet research reports and source citations."
+    },
+    "/users/{userId}/knowledgeNodes/{nodeId}": {
+      "schema": { "$ref": "#/entities/KnowledgeNode" },
+      "description": "User-isolated Knowledge Graph entities, claims, and relationships."
+    },
+    "/users/{userId}/behaviourInsights/{insightId}": {
+      "schema": { "$ref": "#/entities/BehaviourInsight" },
+      "description": "User-isolated Behaviour Engine findings separating facts from predictions."
+    },
+    "/users/{userId}/techAnalyses/{analysisId}": {
+      "schema": { "$ref": "#/entities/TechAnalysis" },
+      "description": "User-isolated GRI v0.5 frontend, backend, and server technology intelligence analyses."
+    },
+    "/users/{userId}/cveAdvisories/{advisoryId}": {
+      "schema": { "$ref": "#/entities/CveAdvisory" },
+      "description": "User-isolated GRI v0.5 CVE, CISA KEV, and OWASP security advisory intelligence records."
+    },
+    "/users/{userId}/researchMonitors/{monitorId}": {
+      "schema": { "$ref": "#/entities/ResearchMonitor" },
+      "description": "User-isolated GRI v0.5 continuous discovery monitors with configurable rate limits and source policies."
+    }
+  }
+}

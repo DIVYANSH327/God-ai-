@@ -1,0 +1,1034 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Pillar 4.1: Global Default-Deny Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Core Primitives
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isVerifiedOwner(userId) {
+      return isVerifiedUser() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function userExistsOrCreating(userId) {
+      return exists(/databases/$(database)/documents/users/$(userId)) ||
+        existsAfter(/databases/$(database)/documents/users/$(userId));
+    }
+
+    function conversationExistsOrCreating(userId, conversationId) {
+      return exists(/databases/$(database)/documents/users/$(userId)/conversations/$(conversationId)) ||
+        existsAfter(/databases/$(database)/documents/users/$(userId)/conversations/$(conversationId));
+    }
+
+    function isValidIntent(val) {
+      return val is string && val.size() <= 24 &&
+        (val == 'chat' || val == 'research' || val == 'coding' || val == 'vision' || val == 'security' || val == 'automation');
+    }
+
+    function isBoundedStringList(arr, maxItems) {
+      return arr is list && arr.size() <= maxItems && (arr.size() == 0 || arr[0] is string);
+    }
+
+    function isBoundedMapList(arr, maxItems) {
+      return arr is list && arr.size() <= maxItems && (arr.size() == 0 || arr[0] is map);
+    }
+
+    // Validation Blueprint 1: UserProfile (Non-PII operational settings)
+    function isValidUserProfile(data) {
+      return data.keys().hasAll([
+          'uid',
+          'displayName',
+          'photoURL',
+          'executionMode',
+          'emergencyStop',
+          'allowWebResearch',
+          'allowFileAnalysis',
+          'allowLocalBridge',
+          'allowAutomationQueue',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'uid',
+          'displayName',
+          'photoURL',
+          'executionMode',
+          'emergencyStop',
+          'allowWebResearch',
+          'allowFileAnalysis',
+          'allowLocalBridge',
+          'allowAutomationQueue',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.uid == request.auth.uid &&
+        isValidId(data.uid) &&
+        data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 120 &&
+        data.photoURL is string && data.photoURL.size() <= 1024 &&
+        data.executionMode is string && data.executionMode.size() <= 16 &&
+        (data.executionMode == 'cloud' || data.executionMode == 'local' || data.executionMode == 'hybrid') &&
+        data.emergencyStop is bool &&
+        data.allowWebResearch is bool &&
+        data.allowFileAnalysis is bool &&
+        data.allowLocalBridge is bool &&
+        data.allowAutomationQueue is bool &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    // Validation Blueprint 2: PrivateAccount (Isolated PII)
+    function isValidPrivateAccount(data) {
+      return data.keys().hasAll(['uid', 'email', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['uid', 'email', 'createdAt', 'updatedAt']) &&
+        data.uid == request.auth.uid &&
+        isValidId(data.uid) &&
+        data.email is string && data.email.size() >= 3 && data.email.size() <= 320 &&
+        data.email == request.auth.token.email &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    // Validation Blueprint 3: Conversation
+    function isValidConversation(data, conversationId) {
+      return data.keys().hasAll([
+          'id',
+          'userId',
+          'title',
+          'lastIntent',
+          'lastMessagePreview',
+          'messageCount',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id',
+          'userId',
+          'title',
+          'lastIntent',
+          'lastMessagePreview',
+          'messageCount',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.id == conversationId &&
+        isValidId(data.id) &&
+        data.userId == request.auth.uid &&
+        isValidId(data.userId) &&
+        data.title is string && data.title.size() >= 1 && data.title.size() <= 160 &&
+        isValidIntent(data.lastIntent) &&
+        data.lastMessagePreview is string && data.lastMessagePreview.size() <= 300 &&
+        data.messageCount is int && data.messageCount >= 0 && data.messageCount <= 10000 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    // Validation Blueprint 4: Message
+    function isValidMessage(data, conversationId, messageId) {
+      return data.keys().hasAll([
+          'id',
+          'conversationId',
+          'userId',
+          'role',
+          'content',
+          'intent',
+          'agentModuleNote',
+          'modelUsed',
+          'createdAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id',
+          'conversationId',
+          'userId',
+          'role',
+          'content',
+          'intent',
+          'agentModuleNote',
+          'modelUsed',
+          'createdAt'
+        ]) &&
+        data.id == messageId &&
+        isValidId(data.id) &&
+        data.conversationId == conversationId &&
+        isValidId(data.conversationId) &&
+        data.userId == request.auth.uid &&
+        isValidId(data.userId) &&
+        data.role is string && data.role.size() <= 16 &&
+        (data.role == 'user' || data.role == 'assistant') &&
+        data.content is string && data.content.size() >= 1 && data.content.size() <= 32000 &&
+        isValidIntent(data.intent) &&
+        data.agentModuleNote is string && data.agentModuleNote.size() <= 400 &&
+        data.modelUsed is string && data.modelUsed.size() >= 1 && data.modelUsed.size() <= 64 &&
+        data.createdAt is timestamp;
+    }
+
+    // Validation Blueprint 5: TaskRecord
+    function isValidTask(data, taskId) {
+      return data.keys().hasAll([
+          'id',
+          'userId',
+          'title',
+          'category',
+          'status',
+          'priority',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id',
+          'userId',
+          'title',
+          'category',
+          'status',
+          'priority',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.id == taskId &&
+        isValidId(data.id) &&
+        data.userId == request.auth.uid &&
+        isValidId(data.userId) &&
+        data.title is string && data.title.size() >= 1 && data.title.size() <= 200 &&
+        isValidIntent(data.category) &&
+        data.status is string && data.status.size() <= 24 &&
+        (data.status == 'queued' || data.status == 'in_progress' || data.status == 'completed' || data.status == 'archived') &&
+        data.priority is string && data.priority.size() <= 16 &&
+        (data.priority == 'low' || data.priority == 'medium' || data.priority == 'high') &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    // Validation Blueprint 6: AuditEvent
+    function isValidAuditEvent(data, eventId) {
+      return data.keys().hasAll([
+          'id',
+          'userId',
+          'action',
+          'category',
+          'severity',
+          'summary',
+          'createdAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id',
+          'userId',
+          'action',
+          'category',
+          'severity',
+          'summary',
+          'createdAt'
+        ]) &&
+        data.id == eventId &&
+        isValidId(data.id) &&
+        data.userId == request.auth.uid &&
+        isValidId(data.userId) &&
+        data.action is string && data.action.size() >= 1 && data.action.size() <= 80 &&
+        data.category is string && data.category.size() <= 24 &&
+        (data.category == 'auth' || data.category == 'chat' || data.category == 'security' || data.category == 'settings' || data.category == 'memory' || data.category == 'task' || data.category == 'network' || data.category == 'research' || data.category == 'knowledge' || data.category == 'behaviour') &&
+        data.severity is string && data.severity.size() <= 16 &&
+        (data.severity == 'info' || data.severity == 'warning' || data.severity == 'critical') &&
+        data.summary is string && data.summary.size() >= 1 && data.summary.size() <= 320 &&
+        data.createdAt is timestamp;
+    }
+
+    // Validation Blueprint 7: GIN v0.2 NetworkAsset
+    function isValidNetworkAsset(data, assetId) {
+      return data.keys().hasAll([
+          'id',
+          'userId',
+          'hostname',
+          'ipRange',
+          'authorizedScope',
+          'assetType',
+          'status',
+          'dnsQueriesPerMin',
+          'nxdomainRatio',
+          'outboundMbps',
+          'baselineMbps',
+          'anomalyScore',
+          'threatMatch',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id',
+          'userId',
+          'hostname',
+          'ipRange',
+          'authorizedScope',
+          'assetType',
+          'status',
+          'dnsQueriesPerMin',
+          'nxdomainRatio',
+          'outboundMbps',
+          'baselineMbps',
+          'anomalyScore',
+          'threatMatch',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.id == assetId &&
+        isValidId(data.id) &&
+        data.userId == request.auth.uid &&
+        isValidId(data.userId) &&
+        data.hostname is string && data.hostname.size() >= 1 && data.hostname.size() <= 120 &&
+        data.ipRange is string && data.ipRange.size() >= 1 && data.ipRange.size() <= 64 &&
+        data.authorizedScope is string && data.authorizedScope.size() >= 1 && data.authorizedScope.size() <= 120 &&
+        data.assetType is string && data.assetType.size() <= 24 &&
+        (data.assetType == 'gateway' || data.assetType == 'workstation' || data.assetType == 'server' || data.assetType == 'sensor' || data.assetType == 'kali_node' || data.assetType == 'windows_node') &&
+        data.status is string && data.status.size() <= 24 &&
+        (data.status == 'nominal' || data.status == 'degraded' || data.status == 'anomalous' || data.status == 'isolated') &&
+        data.dnsQueriesPerMin is number && data.dnsQueriesPerMin >= 0 && data.dnsQueriesPerMin <= 1000000 &&
+        data.nxdomainRatio is number && data.nxdomainRatio >= 0 && data.nxdomainRatio <= 1 &&
+        data.outboundMbps is number && data.outboundMbps >= 0 && data.outboundMbps <= 100000 &&
+        data.baselineMbps is number && data.baselineMbps >= 0 && data.baselineMbps <= 100000 &&
+        data.anomalyScore is number && data.anomalyScore >= 0 && data.anomalyScore <= 100 &&
+        data.threatMatch is string && data.threatMatch.size() <= 240 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    // Validation Blueprint 8: GIN v0.2 ResearchReport
+    function isValidResearchReport(data, reportId) {
+      return data.keys().hasAll([
+          'id',
+          'userId',
+          'query',
+          'summary',
+          'facts',
+          'predictions',
+          'confidenceScore',
+          'sources',
+          'scheduleCadence',
+          'createdAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id',
+          'userId',
+          'query',
+          'summary',
+          'facts',
+          'predictions',
+          'confidenceScore',
+          'sources',
+          'scheduleCadence',
+          'createdAt'
+        ]) &&
+        data.id == reportId &&
+        isValidId(data.id) &&
+        data.userId == request.auth.uid &&
+        isValidId(data.userId) &&
+        data.query is string && data.query.size() >= 1 && data.query.size() <= 400 &&
+        data.summary is string && data.summary.size() >= 1 && data.summary.size() <= 16000 &&
+        isBoundedStringList(data.facts, 12) &&
+        isBoundedStringList(data.predictions, 12) &&
+        data.confidenceScore is number && data.confidenceScore >= 0 && data.confidenceScore <= 100 &&
+        isBoundedMapList(data.sources, 15) &&
+        data.scheduleCadence is string && data.scheduleCadence.size() <= 16 &&
+        (data.scheduleCadence == 'manual' || data.scheduleCadence == 'daily' || data.scheduleCadence == 'weekly') &&
+        data.createdAt is timestamp;
+    }
+
+    // Validation Blueprint 9: GIN v0.2 KnowledgeNode
+    function isValidKnowledgeNode(data, nodeId) {
+      return data.keys().hasAll([
+          'id',
+          'userId',
+          'label',
+          'entityType',
+          'claim',
+          'sourceTitle',
+          'sourceUri',
+          'confidenceScore',
+          'relations',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id',
+          'userId',
+          'label',
+          'entityType',
+          'claim',
+          'sourceTitle',
+          'sourceUri',
+          'confidenceScore',
+          'relations',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.id == nodeId &&
+        isValidId(data.id) &&
+        data.userId == request.auth.uid &&
+        isValidId(data.userId) &&
+        data.label is string && data.label.size() >= 1 && data.label.size() <= 120 &&
+        data.entityType is string && data.entityType.size() <= 24 &&
+        (data.entityType == 'concept' || data.entityType == 'organization' || data.entityType == 'technology' || data.entityType == 'asset' || data.entityType == 'threat' || data.entityType == 'protocol' || data.entityType == 'vulnerability' || data.entityType == 'framework' || data.entityType == 'infrastructure') &&
+        data.claim is string && data.claim.size() >= 1 && data.claim.size() <= 600 &&
+        data.sourceTitle is string && data.sourceTitle.size() >= 1 && data.sourceTitle.size() <= 160 &&
+        data.sourceUri is string && data.sourceUri.size() <= 1024 &&
+        data.confidenceScore is number && data.confidenceScore >= 0 && data.confidenceScore <= 100 &&
+        isBoundedMapList(data.relations, 20) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    // Validation Blueprint 10: GIN v0.2 BehaviourInsight
+    function isValidBehaviourInsight(data, insightId) {
+      return data.keys().hasAll([
+          'id',
+          'userId',
+          'title',
+          'domain',
+          'severity',
+          'confidenceScore',
+          'facts',
+          'predictions',
+          'explanation',
+          'sourceRefs',
+          'createdAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id',
+          'userId',
+          'title',
+          'domain',
+          'severity',
+          'confidenceScore',
+          'facts',
+          'predictions',
+          'explanation',
+          'sourceRefs',
+          'createdAt'
+        ]) &&
+        data.id == insightId &&
+        isValidId(data.id) &&
+        data.userId == request.auth.uid &&
+        isValidId(data.userId) &&
+        data.title is string && data.title.size() >= 1 && data.title.size() <= 180 &&
+        data.domain is string && data.domain.size() <= 16 &&
+        (data.domain == 'network' || data.domain == 'internet' || data.domain == 'hybrid') &&
+        data.severity is string && data.severity.size() <= 16 &&
+        (data.severity == 'info' || data.severity == 'warning' || data.severity == 'critical') &&
+        data.confidenceScore is number && data.confidenceScore >= 0 && data.confidenceScore <= 100 &&
+        isBoundedStringList(data.facts, 12) &&
+        isBoundedStringList(data.predictions, 12) &&
+        data.explanation is string && data.explanation.size() >= 1 && data.explanation.size() <= 2000 &&
+        isBoundedStringList(data.sourceRefs, 12) &&
+        data.createdAt is timestamp;
+    }
+
+    // Validation Blueprint 11: GRI v0.5 TechAnalysis (Frontend / Backend / Server)
+    function isValidTechAnalysis(data, analysisId) {
+      return data.keys().hasAll([
+          'id',
+          'userId',
+          'target',
+          'category',
+          'title',
+          'summary',
+          'detectedTechnologies',
+          'securityHeaders',
+          'dnsSummary',
+          'certSummary',
+          'sources',
+          'confidenceScore',
+          'createdAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id',
+          'userId',
+          'target',
+          'category',
+          'title',
+          'summary',
+          'detectedTechnologies',
+          'securityHeaders',
+          'dnsSummary',
+          'certSummary',
+          'sources',
+          'confidenceScore',
+          'createdAt'
+        ]) &&
+        data.id == analysisId &&
+        isValidId(data.id) &&
+        data.userId == request.auth.uid &&
+        isValidId(data.userId) &&
+        data.target is string && data.target.size() >= 1 && data.target.size() <= 240 &&
+        data.category is string && data.category.size() <= 16 &&
+        (data.category == 'frontend' || data.category == 'backend' || data.category == 'server') &&
+        data.title is string && data.title.size() >= 1 && data.title.size() <= 180 &&
+        data.summary is string && data.summary.size() >= 1 && data.summary.size() <= 6000 &&
+        isBoundedStringList(data.detectedTechnologies, 20) &&
+        isBoundedStringList(data.securityHeaders, 15) &&
+        isBoundedStringList(data.dnsSummary, 20) &&
+        isBoundedStringList(data.certSummary, 15) &&
+        isBoundedMapList(data.sources, 15) &&
+        data.confidenceScore is number && data.confidenceScore >= 0 && data.confidenceScore <= 100 &&
+        data.createdAt is timestamp;
+    }
+
+    // Validation Blueprint 12: GRI v0.5 CveAdvisory
+    function isValidCveAdvisory(data, advisoryId) {
+      return data.keys().hasAll([
+          'id',
+          'userId',
+          'cveId',
+          'title',
+          'vendorProduct',
+          'severity',
+          'cvssScore',
+          'cisaKev',
+          'owaspCategory',
+          'affectedVersions',
+          'mitigation',
+          'sourceUri',
+          'publishedDate',
+          'createdAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id',
+          'userId',
+          'cveId',
+          'title',
+          'vendorProduct',
+          'severity',
+          'cvssScore',
+          'cisaKev',
+          'owaspCategory',
+          'affectedVersions',
+          'mitigation',
+          'sourceUri',
+          'publishedDate',
+          'createdAt'
+        ]) &&
+        data.id == advisoryId &&
+        isValidId(data.id) &&
+        data.userId == request.auth.uid &&
+        isValidId(data.userId) &&
+        data.cveId is string && data.cveId.size() >= 1 && data.cveId.size() <= 40 &&
+        data.title is string && data.title.size() >= 1 && data.title.size() <= 200 &&
+        data.vendorProduct is string && data.vendorProduct.size() >= 1 && data.vendorProduct.size() <= 160 &&
+        data.severity is string && data.severity.size() <= 16 &&
+        (data.severity == 'critical' || data.severity == 'high' || data.severity == 'medium' || data.severity == 'low' || data.severity == 'unknown') &&
+        data.cvssScore is number && data.cvssScore >= 0 && data.cvssScore <= 10 &&
+        data.cisaKev is bool &&
+        data.owaspCategory is string && data.owaspCategory.size() >= 1 && data.owaspCategory.size() <= 120 &&
+        data.affectedVersions is string && data.affectedVersions.size() >= 1 && data.affectedVersions.size() <= 300 &&
+        data.mitigation is string && data.mitigation.size() >= 1 && data.mitigation.size() <= 2000 &&
+        data.sourceUri is string && data.sourceUri.size() <= 1024 &&
+        data.publishedDate is string && data.publishedDate.size() >= 1 && data.publishedDate.size() <= 40 &&
+        data.createdAt is timestamp;
+    }
+
+    // Validation Blueprint 13: GRI v0.5 ResearchMonitor
+    function isValidResearchMonitor(data, monitorId) {
+      return data.keys().hasAll([
+          'id',
+          'userId',
+          'name',
+          'target',
+          'monitorType',
+          'cadence',
+          'rateLimitPerHour',
+          'sourcePolicy',
+          'enabled',
+          'lastRunSummary',
+          'lastRunAtMs',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id',
+          'userId',
+          'name',
+          'target',
+          'monitorType',
+          'cadence',
+          'rateLimitPerHour',
+          'sourcePolicy',
+          'enabled',
+          'lastRunSummary',
+          'lastRunAtMs',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.id == monitorId &&
+        isValidId(data.id) &&
+        data.userId == request.auth.uid &&
+        isValidId(data.userId) &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 140 &&
+        data.target is string && data.target.size() >= 1 && data.target.size() <= 240 &&
+        data.monitorType is string && data.monitorType.size() <= 24 &&
+        (data.monitorType == 'web_topic' || data.monitorType == 'website_tech' || data.monitorType == 'server_dns' || data.monitorType == 'cve_advisory') &&
+        data.cadence is string && data.cadence.size() <= 16 &&
+        (data.cadence == 'hourly' || data.cadence == 'daily' || data.cadence == 'weekly') &&
+        data.rateLimitPerHour is int && data.rateLimitPerHour >= 1 && data.rateLimitPerHour <= 12 &&
+        data.sourcePolicy is string && data.sourcePolicy.size() <= 32 &&
+        (data.sourcePolicy == 'respect_robots_strict' || data.sourcePolicy == 'official_advisories_only' || data.sourcePolicy == 'public_docs_only') &&
+        data.enabled is bool &&
+        data.lastRunSummary is string && data.lastRunSummary.size() <= 300 &&
+        data.lastRunAtMs is number && data.lastRunAtMs >= 0 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    // Root User Workspace Profile
+    match /users/{userId} {
+      allow get: if isOwner(userId) && isValidId(userId);
+      allow list: if false;
+
+      allow create: if isVerifiedOwner(userId) &&
+        isValidId(userId) &&
+        isValidUserProfile(incoming()) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+
+      allow update: if isVerifiedOwner(userId) &&
+        isValidId(userId) &&
+        isValidUserProfile(incoming()) &&
+        incoming().uid == existing().uid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'photoURL', 'updatedAt']) ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['executionMode', 'updatedAt']) ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['emergencyStop', 'updatedAt']) ||
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'allowWebResearch',
+            'allowFileAnalysis',
+            'allowLocalBridge',
+            'allowAutomationQueue',
+            'updatedAt'
+          ])
+        );
+
+      allow delete: if false;
+
+      // Split PII Subcollection
+      match /private/{docId} {
+        allow get: if isOwner(userId) && isValidId(userId) && docId == 'account';
+        allow list: if false;
+
+        allow create: if isVerifiedOwner(userId) &&
+          isValidId(userId) &&
+          docId == 'account' &&
+          isValidPrivateAccount(incoming()) &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time &&
+          userExistsOrCreating(userId);
+
+        allow update: if isVerifiedOwner(userId) &&
+          isValidId(userId) &&
+          docId == 'account' &&
+          isValidPrivateAccount(incoming()) &&
+          incoming().uid == existing().uid &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['email', 'updatedAt']) &&
+          exists(/databases/$(database)/documents/users/$(userId));
+
+        allow delete: if false;
+      }
+
+      // Conversations Subcollection
+      match /conversations/{conversationId} {
+        allow get: if isOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(conversationId) &&
+          existing().userId == request.auth.uid &&
+          exists(/databases/$(database)/documents/users/$(userId));
+
+        allow list: if isOwner(userId) &&
+          existing().userId == request.auth.uid;
+
+        allow create: if isVerifiedOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(conversationId) &&
+          isValidConversation(incoming(), conversationId) &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time &&
+          userExistsOrCreating(userId);
+
+        allow update: if isVerifiedOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(conversationId) &&
+          isValidConversation(incoming(), conversationId) &&
+          incoming().id == existing().id &&
+          incoming().userId == existing().userId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time && (
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'title',
+              'lastIntent',
+              'lastMessagePreview',
+              'messageCount',
+              'updatedAt'
+            ]) ||
+            incoming().diff(existing()).affectedKeys().hasOnly(['title', 'updatedAt'])
+          ) &&
+          exists(/databases/$(database)/documents/users/$(userId));
+
+        allow delete: if isVerifiedOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(conversationId) &&
+          existing().userId == request.auth.uid &&
+          exists(/databases/$(database)/documents/users/$(userId));
+
+        // Nested Messages Subcollection
+        match /messages/{messageId} {
+          allow get: if isOwner(userId) &&
+            isValidId(userId) &&
+            isValidId(conversationId) &&
+            isValidId(messageId) &&
+            existing().userId == request.auth.uid &&
+            exists(/databases/$(database)/documents/users/$(userId)/conversations/$(conversationId));
+
+          allow list: if isOwner(userId) &&
+            existing().userId == request.auth.uid &&
+            existing().conversationId == conversationId;
+
+          allow create: if isVerifiedOwner(userId) &&
+            isValidId(userId) &&
+            isValidId(conversationId) &&
+            isValidId(messageId) &&
+            isValidMessage(incoming(), conversationId, messageId) &&
+            incoming().createdAt == request.time &&
+            userExistsOrCreating(userId) &&
+            conversationExistsOrCreating(userId, conversationId);
+
+          allow update: if false;
+
+          allow delete: if isVerifiedOwner(userId) &&
+            isValidId(userId) &&
+            isValidId(conversationId) &&
+            isValidId(messageId) &&
+            existing().userId == request.auth.uid;
+        }
+      }
+
+      // Tasks Subcollection
+      match /tasks/{taskId} {
+        allow get: if isOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(taskId) &&
+          existing().userId == request.auth.uid &&
+          exists(/databases/$(database)/documents/users/$(userId));
+
+        allow list: if isOwner(userId) &&
+          existing().userId == request.auth.uid;
+
+        allow create: if isVerifiedOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(taskId) &&
+          isValidTask(incoming(), taskId) &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time &&
+          userExistsOrCreating(userId);
+
+        allow update: if isVerifiedOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(taskId) &&
+          isValidTask(incoming(), taskId) &&
+          existing().status != 'archived' &&
+          incoming().id == existing().id &&
+          incoming().userId == existing().userId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time && (
+            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']) ||
+            incoming().diff(existing()).affectedKeys().hasOnly(['title', 'category', 'priority', 'updatedAt'])
+          ) &&
+          exists(/databases/$(database)/documents/users/$(userId));
+
+        allow delete: if isVerifiedOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(taskId) &&
+          existing().userId == request.auth.uid &&
+          exists(/databases/$(database)/documents/users/$(userId));
+      }
+
+      // Append-Only Security & Activity Audit Events Subcollection
+      match /auditEvents/{eventId} {
+        allow get: if isOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(eventId) &&
+          existing().userId == request.auth.uid &&
+          exists(/databases/$(database)/documents/users/$(userId));
+
+        allow list: if isOwner(userId) &&
+          existing().userId == request.auth.uid;
+
+        allow create: if isVerifiedOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(eventId) &&
+          isValidAuditEvent(incoming(), eventId) &&
+          incoming().createdAt == request.time &&
+          userExistsOrCreating(userId);
+
+        allow update, delete: if false;
+      }
+
+      // GIN v0.2: Authorized Network Assets & Telemetry
+      match /networkAssets/{assetId} {
+        allow get: if isOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(assetId) &&
+          existing().userId == request.auth.uid &&
+          exists(/databases/$(database)/documents/users/$(userId));
+
+        allow list: if isOwner(userId) &&
+          existing().userId == request.auth.uid;
+
+        allow create: if isVerifiedOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(assetId) &&
+          isValidNetworkAsset(incoming(), assetId) &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time &&
+          userExistsOrCreating(userId);
+
+        allow update: if isVerifiedOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(assetId) &&
+          isValidNetworkAsset(incoming(), assetId) &&
+          incoming().id == existing().id &&
+          incoming().userId == existing().userId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time && (
+            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']) ||
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'dnsQueriesPerMin',
+              'nxdomainRatio',
+              'outboundMbps',
+              'baselineMbps',
+              'anomalyScore',
+              'status',
+              'threatMatch',
+              'updatedAt'
+            ])
+          ) &&
+          exists(/databases/$(database)/documents/users/$(userId));
+
+        allow delete: if isVerifiedOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(assetId) &&
+          existing().userId == request.auth.uid &&
+          exists(/databases/$(database)/documents/users/$(userId));
+      }
+
+      // GIN v0.2: Grounded Internet Research Reports
+      match /researchReports/{reportId} {
+        allow get: if isOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(reportId) &&
+          existing().userId == request.auth.uid &&
+          exists(/databases/$(database)/documents/users/$(userId));
+
+        allow list: if isOwner(userId) &&
+          existing().userId == request.auth.uid;
+
+        allow create: if isVerifiedOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(reportId) &&
+          isValidResearchReport(incoming(), reportId) &&
+          incoming().createdAt == request.time &&
+          userExistsOrCreating(userId);
+
+        allow update: if false;
+
+        allow delete: if isVerifiedOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(reportId) &&
+          existing().userId == request.auth.uid &&
+          exists(/databases/$(database)/documents/users/$(userId));
+      }
+
+      // GIN v0.2: Knowledge Graph Nodes
+      match /knowledgeNodes/{nodeId} {
+        allow get: if isOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(nodeId) &&
+          existing().userId == request.auth.uid &&
+          exists(/databases/$(database)/documents/users/$(userId));
+
+        allow list: if isOwner(userId) &&
+          existing().userId == request.auth.uid;
+
+        allow create: if isVerifiedOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(nodeId) &&
+          isValidKnowledgeNode(incoming(), nodeId) &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time &&
+          userExistsOrCreating(userId);
+
+        allow update: if isVerifiedOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(nodeId) &&
+          isValidKnowledgeNode(incoming(), nodeId) &&
+          incoming().id == existing().id &&
+          incoming().userId == existing().userId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time &&
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'claim',
+            'confidenceScore',
+            'relations',
+            'updatedAt'
+          ]) &&
+          exists(/databases/$(database)/documents/users/$(userId));
+
+        allow delete: if isVerifiedOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(nodeId) &&
+          existing().userId == request.auth.uid &&
+          exists(/databases/$(database)/documents/users/$(userId));
+      }
+
+      // GIN v0.2: Behaviour Engine Insights
+      match /behaviourInsights/{insightId} {
+        allow get: if isOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(insightId) &&
+          existing().userId == request.auth.uid &&
+          exists(/databases/$(database)/documents/users/$(userId));
+
+        allow list: if isOwner(userId) &&
+          existing().userId == request.auth.uid;
+
+        allow create: if isVerifiedOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(insightId) &&
+          isValidBehaviourInsight(incoming(), insightId) &&
+          incoming().createdAt == request.time &&
+          userExistsOrCreating(userId);
+
+        allow update: if false;
+
+        allow delete: if isVerifiedOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(insightId) &&
+          existing().userId == request.auth.uid &&
+          exists(/databases/$(database)/documents/users/$(userId));
+      }
+
+      // GRI v0.5: Frontend, Backend & Server Technology Analyses
+      match /techAnalyses/{analysisId} {
+        allow get: if isOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(analysisId) &&
+          existing().userId == request.auth.uid &&
+          exists(/databases/$(database)/documents/users/$(userId));
+
+        allow list: if isOwner(userId) &&
+          existing().userId == request.auth.uid;
+
+        allow create: if isVerifiedOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(analysisId) &&
+          isValidTechAnalysis(incoming(), analysisId) &&
+          incoming().createdAt == request.time &&
+          userExistsOrCreating(userId);
+
+        allow update: if false;
+
+        allow delete: if isVerifiedOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(analysisId) &&
+          existing().userId == request.auth.uid &&
+          exists(/databases/$(database)/documents/users/$(userId));
+      }
+
+      // GRI v0.5: Public CVE, CISA KEV & OWASP Advisories
+      match /cveAdvisories/{advisoryId} {
+        allow get: if isOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(advisoryId) &&
+          existing().userId == request.auth.uid &&
+          exists(/databases/$(database)/documents/users/$(userId));
+
+        allow list: if isOwner(userId) &&
+          existing().userId == request.auth.uid;
+
+        allow create: if isVerifiedOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(advisoryId) &&
+          isValidCveAdvisory(incoming(), advisoryId) &&
+          incoming().createdAt == request.time &&
+          userExistsOrCreating(userId);
+
+        allow update: if false;
+
+        allow delete: if isVerifiedOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(advisoryId) &&
+          existing().userId == request.auth.uid &&
+          exists(/databases/$(database)/documents/users/$(userId));
+      }
+
+      // GRI v0.5: Continuous Research Discovery Monitors
+      match /researchMonitors/{monitorId} {
+        allow get: if isOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(monitorId) &&
+          existing().userId == request.auth.uid &&
+          exists(/databases/$(database)/documents/users/$(userId));
+
+        allow list: if isOwner(userId) &&
+          existing().userId == request.auth.uid;
+
+        allow create: if isVerifiedOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(monitorId) &&
+          isValidResearchMonitor(incoming(), monitorId) &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time &&
+          userExistsOrCreating(userId);
+
+        allow update: if isVerifiedOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(monitorId) &&
+          isValidResearchMonitor(incoming(), monitorId) &&
+          incoming().id == existing().id &&
+          incoming().userId == existing().userId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time && (
+            incoming().diff(existing()).affectedKeys().hasOnly(['enabled', 'updatedAt']) ||
+            incoming().diff(existing()).affectedKeys().hasOnly(['cadence', 'rateLimitPerHour', 'sourcePolicy', 'updatedAt']) ||
+            incoming().diff(existing()).affectedKeys().hasOnly(['lastRunSummary', 'lastRunAtMs', 'updatedAt'])
+          ) &&
+          exists(/databases/$(database)/documents/users/$(userId));
+
+        allow delete: if isVerifiedOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(monitorId) &&
+          existing().userId == request.auth.uid &&
+          exists(/databases/$(database)/documents/users/$(userId));
+      }
+    }
+  }
+}
