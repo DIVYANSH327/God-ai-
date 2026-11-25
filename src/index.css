@@ -59,9 +59,62 @@
   transform-origin: center;
 }
 
+@keyframes sentinelEcgSweep {
+  0% {
+    stroke-dashoffset: 680;
+  }
+  100% {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes sentinelBeaconRipple {
+  0% {
+    transform: scale(0.95);
+    opacity: 0.78;
+  }
+  70% {
+    transform: scale(2.15);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(2.15);
+    opacity: 0;
+  }
+}
+
+@keyframes sentinelSlotGlow {
+  0%,
+  100% {
+    opacity: 0.86;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.sentinel-ecg-trace {
+  stroke-dasharray: 680;
+  stroke-dashoffset: 0;
+  animation: sentinelEcgSweep 2.4s ease-out 1;
+}
+
+.sentinel-beacon-ring {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: sentinelBeaconRipple 2s cubic-bezier(0.22, 1, 0.36, 1) infinite;
+}
+
+.sentinel-slot-active {
+  animation: sentinelSlotGlow 2.2s ease-in-out infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .neural-orbit-cw,
-  .neural-orbit-ccw {
+  .neural-orbit-ccw,
+  .sentinel-ecg-trace,
+  .sentinel-beacon-ring,
+  .sentinel-slot-active {
     animation: none !important;
   }
 }

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-GOD SENTINEL v0.8 Micro-Agent (Linux & Windows)
-===============================================
+GOD SENTINEL v0.6.0 Micro-Agent (Linux & Windows)
+=================================================
 Lightweight, authorized, least-privilege defensive telemetry collector.
 
 Safety Invariants:
@@ -27,12 +27,13 @@ import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-AGENT_VERSION = "0.8.0"
+AGENT_VERSION = "0.6.0"
 
 DEFAULT_LIMITS = {
     "maxCpuPercent": 5,
@@ -128,6 +129,7 @@ def collect_system_metrics() -> Dict[str, Any]:
     ram_percent = 0
     disk_percent = 0
     uptime_sec = 0
+    load_avg_1 = 0.0
     services: List[Dict[str, Any]] = []
 
     try:
@@ -142,6 +144,7 @@ def collect_system_metrics() -> Dict[str, Any]:
         cpu_percent = _read_linux_cpu_percent()
         ram_percent = _read_linux_ram_percent()
         uptime_sec = _read_linux_uptime_sec()
+        load_avg_1 = _read_linux_load_avg_1()
         services = _read_linux_services()
     elif system == "windows":
         cpu_percent, ram_percent, uptime_sec, services = _read_windows_metrics()
@@ -150,8 +153,10 @@ def collect_system_metrics() -> Dict[str, Any]:
         "cpuPercent": max(0, min(100, cpu_percent)),
         "ramPercent": max(0, min(100, ram_percent)),
         "diskPercent": max(0, min(100, disk_percent)),
+        "loadAvg1": round(max(0.0, load_avg_1), 2),
         "uptimeSec": max(0, uptime_sec),
         "services": services[:20],
+        "dataOrigin": "real_telemetry",
     }
 
 
@@ -201,6 +206,56 @@ def _read_linux_uptime_sec() -> int:
             return int(float(fh.read().split()[0]))
     except Exception:
         return 0
+
+
+def _read_linux_load_avg_1() -> float:
+    try:
+        with open("/proc/loadavg", "r", encoding="utf-8") as fh:
+            return float(fh.read().split()[0])
+    except Exception:
+        return 0.0
+
+
+def collect_linux_journal_events(limit: int = 8) -> List[Dict[str, Any]]:
+    """Collect recent non-sensitive systemd journal entries when journalctl is available."""
+    if platform.system().lower() != "linux" or not shutil.which("journalctl"):
+        return []
+    events: List[Dict[str, Any]] = []
+    try:
+        out = subprocess.check_output(
+            ["journalctl", "-n", str(limit), "--no-pager", "-o", "json"],
+            timeout=3,
+            text=True,
+            stderr=subprocess.DEVNULL,
+        )
+        for line in out.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+            except Exception:
+                continue
+            unit = str(entry.get("_SYSTEMD_UNIT") or entry.get("SYSLOG_IDENTIFIER") or "system")
+            msg = redact_text(str(entry.get("MESSAGE") or ""))
+            if not msg:
+                continue
+            prio = int(entry.get("PRIORITY", 6)) if str(entry.get("PRIORITY", "")).isdigit() else 6
+            sev = "high" if prio <= 3 else ("medium" if prio == 4 else "info")
+            events.append(
+                {
+                    "eventType": "log",
+                    "severity": sev,
+                    "summary": f"[{unit}] {msg[:180]}",
+                    "payload": {"unit": unit, "priority": prio, "message": msg},
+                    "collector": "sentinel-journald",
+                    "observedAt": utc_now_iso(),
+                    "dataOrigin": "real_telemetry",
+                }
+            )
+    except Exception:
+        pass
+    return events
 
 
 def _read_linux_services() -> List[Dict[str, Any]]:
@@ -284,6 +339,7 @@ def diff_process_snapshots(
                     "summary": f"Process created: {info['processName']} (PID {pid})",
                     "payload": redact_payload({"action": "created", **info}),
                     "collector": "sentinel-process-watcher",
+                    "dataOrigin": "real_telemetry",
                     "observedAt": utc_now_iso(),
                 }
             )
@@ -296,6 +352,7 @@ def diff_process_snapshots(
                     "summary": f"Process terminated: {info['processName']} (PID {pid})",
                     "payload": redact_payload({"action": "terminated", **info}),
                     "collector": "sentinel-process-watcher",
+                    "dataOrigin": "real_telemetry",
                     "observedAt": utc_now_iso(),
                 }
             )
@@ -340,6 +397,7 @@ def collect_linux_network_metadata(limit: int = 12) -> List[Dict[str, Any]]:
                         "state": "ESTABLISHED",
                     },
                     "collector": "sentinel-net-metadata",
+                    "dataOrigin": "real_telemetry",
                     "observedAt": utc_now_iso(),
                 }
             )
@@ -383,6 +441,7 @@ def check_file_integrity(
                         "currentSha256": digest[:16],
                     },
                     "collector": "sentinel-fim-sha256",
+                    "dataOrigin": "real_telemetry",
                     "observedAt": utc_now_iso(),
                 }
             )
@@ -409,6 +468,7 @@ def parse_auth_log_lines(lines: List[str]) -> List[Dict[str, Any]]:
                     "summary": f"Failed SSH authentication for user {user} from {src_ip}",
                     "payload": {"username": user, "sourceIp": src_ip, "action": "auth_failed", "remotePort": 22},
                     "collector": "sentinel-auth-log",
+                    "dataOrigin": "real_telemetry",
                     "observedAt": utc_now_iso(),
                 }
             )
@@ -429,6 +489,7 @@ def parse_auth_log_lines(lines: List[str]) -> List[Dict[str, Any]]:
                         "remotePort": 22,
                     },
                     "collector": "sentinel-auth-log",
+                    "dataOrigin": "real_telemetry",
                     "observedAt": utc_now_iso(),
                 }
             )
@@ -456,6 +517,7 @@ def build_simulated_suspicious_drill_events(hostname: str) -> List[Dict[str, Any
                 "failedAttempts": 18,
             },
             "collector": "sentinel-auth-drill",
+            "dataOrigin": "synthetic_demo",
             "observedAt": now,
             "simulatedDrill": True,
         },
@@ -471,6 +533,7 @@ def build_simulated_suspicious_drill_events(hostname: str) -> List[Dict[str, Any
                 "action": "created",
             },
             "collector": "sentinel-process-drill",
+            "dataOrigin": "synthetic_demo",
             "observedAt": now,
             "simulatedDrill": True,
         },
@@ -485,6 +548,7 @@ def build_simulated_suspicious_drill_events(hostname: str) -> List[Dict[str, Any
                 "state": "ESTABLISHED",
             },
             "collector": "sentinel-net-drill",
+            "dataOrigin": "synthetic_demo",
             "observedAt": now,
             "simulatedDrill": True,
         },
@@ -498,6 +562,7 @@ def build_simulated_suspicious_drill_events(hostname: str) -> List[Dict[str, Any
                 "currentSha256": "d2f9e0a7c13144a9",
             },
             "collector": "sentinel-fim-drill",
+            "dataOrigin": "synthetic_demo",
             "observedAt": now,
             "simulatedDrill": True,
         },
@@ -547,9 +612,25 @@ class OfflineEventBuffer:
             self.path.unlink()
 
 
+def validate_controller_url(controller_url: str, allow_insecure_localhost: bool = False) -> str:
+    parsed = urllib.parse.urlparse(controller_url.strip())
+    if parsed.scheme == "https":
+        return controller_url.rstrip("/")
+    host = (parsed.hostname or "").lower()
+    if (
+        parsed.scheme == "http"
+        and allow_insecure_localhost
+        and host in ("127.0.0.1", "localhost", "::1")
+    ):
+        return controller_url.rstrip("/")
+    raise ValueError(
+        "Outbound communication must use HTTPS (TLS). Pass --allow-insecure-localhost only for local loopback testing."
+    )
+
+
 class SentinelControllerClient:
-    def __init__(self, controller_url: str, state_dir: Path) -> None:
-        self.controller_url = controller_url.rstrip("/")
+    def __init__(self, controller_url: str, state_dir: Path, allow_insecure_localhost: bool = False) -> None:
+        self.controller_url = validate_controller_url(controller_url, allow_insecure_localhost)
         self.state_dir = state_dir
         self.state_file = state_dir / "agent_state.json"
         self.buffer = OfflineEventBuffer(state_dir / "buffer.jsonl")
@@ -660,8 +741,9 @@ class SentinelControllerClient:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="GOD SENTINEL v0.8 Authorized Micro-Agent")
-    parser.add_argument("--controller", default="http://127.0.0.1:3000", help="GOD Controller base URL")
+    parser = argparse.ArgumentParser(description="GOD SENTINEL v0.6.0 Authorized Micro-Agent")
+    parser.add_argument("--controller", default="https://127.0.0.1:3000", help="GOD Controller HTTPS base URL")
+    parser.add_argument("--allow-insecure-localhost", action="store_true", help="Permit HTTP only for 127.0.0.1/localhost dev testing")
     parser.add_argument("--state-dir", default=str(Path.home() / ".god-sentinel"), help="Local state & offline buffer dir")
     parser.add_argument("--enroll", dest="enroll_token", help="Single-use enrollment token issued in GOD Command Center")
     parser.add_argument("--region", default="asia-southeast1", help="Server region label")
@@ -671,12 +753,16 @@ def main() -> int:
     parser.add_argument(
         "--simulate-suspicious",
         action="store_true",
-        help="Send a clearly labeled simulated suspicious event chain for Milestone 1 verification",
+        help="Send a clearly labeled synthetic demo suspicious event chain for Milestone 1 verification",
     )
     args = parser.parse_args()
 
     state_dir = Path(args.state_dir)
-    client = SentinelControllerClient(args.controller, state_dir)
+    try:
+        client = SentinelControllerClient(args.controller, state_dir, args.allow_insecure_localhost)
+    except ValueError as err:
+        print(f"Security error: {err}", file=sys.stderr)
+        return 2
 
     state = client.load_state()
     if args.enroll_token:
@@ -710,12 +796,15 @@ def main() -> int:
             events.extend(diff_process_snapshots(prev_procs, curr_procs))
             prev_procs = curr_procs
             events.extend(collect_linux_network_metadata(limit=6))
+            events.extend(collect_linux_journal_events(limit=6))
 
         fim_baseline, fim_events = check_file_integrity(watched_fim, fim_baseline)
         events.extend(fim_events)
 
         if args.simulate_suspicious:
-            events.extend(build_simulated_suspicious_drill_events(state["hostname"]))
+            for drill_ev in build_simulated_suspicious_drill_events(state["hostname"]):
+                drill_ev["dataOrigin"] = "synthetic_demo"
+                events.append(drill_ev)
 
         if events:
             ok, delivery = client.send_events_with_buffering(state, events)

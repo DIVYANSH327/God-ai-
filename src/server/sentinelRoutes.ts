@@ -23,7 +23,13 @@ import {
   validateDefensiveActionRequest,
   type RawSentinelEventInput,
 } from '../shared/sentinelAnalytics.ts';
-import { SENTINEL_VERSION, type SentinelOsType } from '../shared/sentinelTypes.ts';
+import { classifyHeartbeatPingHealth } from '../shared/sentinelPlaybooks.ts';
+import {
+  SENTINEL_VERSION,
+  type PlaybookId,
+  type SentinelHeartbeatPing,
+  type SentinelOsType,
+} from '../shared/sentinelTypes.ts';
 import { sentinelEventQueue } from './sentinelQueue.ts';
 import { runSentinelBrainInvestigation } from './sentinelBrain.ts';
 
@@ -38,6 +44,26 @@ export interface SentinelAuthenticatedRequest extends Request {
 const AGENT_RATE_WINDOW_MS = 60_000;
 const AGENT_RATE_MAX = 180;
 const agentRateWindows = new Map<string, number[]>();
+
+// Rolling 10-minute verified heartbeat ping history per tenant (drives real-time 5-min pulse chart)
+const HEARTBEAT_RETENTION_MS = 10 * 60_000;
+const tenantHeartbeatRing = new Map<string, SentinelHeartbeatPing[]>();
+
+function pushTenantHeartbeat(userId: string, ping: SentinelHeartbeatPing): void {
+  const cutoff = Date.now() - HEARTBEAT_RETENTION_MS;
+  const existing = (tenantHeartbeatRing.get(userId) || []).filter(
+    (p) => new Date(p.observedAt).getTime() >= cutoff
+  );
+  existing.push(ping);
+  tenantHeartbeatRing.set(userId, existing.slice(-240));
+}
+
+function getTenantHeartbeats(userId: string): SentinelHeartbeatPing[] {
+  const cutoff = Date.now() - HEARTBEAT_RETENTION_MS;
+  return (tenantHeartbeatRing.get(userId) || []).filter(
+    (p) => new Date(p.observedAt).getTime() >= cutoff
+  );
+}
 
 function checkAgentRateLimit(key: string): boolean {
   const now = Date.now();
@@ -146,17 +172,50 @@ export function createSentinelRouter(
       }
 
       const body = (req.body || {}) as Record<string, unknown>;
+      const cpuPercent = Number(body.cpuPercent ?? 0);
+      const ramPercent = Number(body.ramPercent ?? 0);
+      const diskPercent = Number(body.diskPercent ?? 0);
+      const loadAvg1 = Number(body.loadAvg1 ?? 0);
+      const latencyMs = Math.max(0, Math.min(60000, Number(body.latencyMs ?? 32)));
+      const dataOrigin =
+        body.dataOrigin === 'synthetic_demo' ? 'synthetic_demo' : 'real_telemetry';
+
       const updated = await recordAgentHeartbeat({
         agentId,
-        cpuPercent: Number(body.cpuPercent ?? 0),
-        ramPercent: Number(body.ramPercent ?? 0),
-        diskPercent: Number(body.diskPercent ?? 0),
+        cpuPercent,
+        ramPercent,
+        diskPercent,
         uptimeSec: Number(body.uptimeSec ?? 0),
         agentVersion: typeof body.agentVersion === 'string' ? body.agentVersion : undefined,
         services: Array.isArray(body.services)
           ? (body.services as Array<{ name: string; state: 'running' | 'stopped' | 'degraded'; pid?: number }>)
           : undefined,
       });
+
+      if (updated) {
+        pushTenantHeartbeat(verified.userId, {
+          id: `hb-${crypto.randomUUID().slice(0, 10)}`,
+          agentId: updated.id,
+          hostname: updated.hostname,
+          region: updated.region,
+          health: classifyHeartbeatPingHealth({
+            cpuPercent: updated.cpuPercent,
+            ramPercent: updated.ramPercent,
+            diskPercent: updated.diskPercent,
+            loadAvg1,
+            latencyMs,
+            agentStatus: updated.status,
+          }),
+          cpuPercent: updated.cpuPercent,
+          ramPercent: updated.ramPercent,
+          diskPercent: updated.diskPercent,
+          loadAvg1,
+          latencyMs,
+          observedAt: new Date().toISOString(),
+          dataOrigin,
+          transport: 'https_controller',
+        });
+      }
 
       const approvedActions = await getPendingApprovedCommandsForAgent(agentId);
 
@@ -247,6 +306,7 @@ export function createSentinelRouter(
         res.json({
           sentinelVersion: SENTINEL_VERSION,
           ...overview,
+          heartbeatHistory: getTenantHeartbeats(uid),
           regionalFindings,
           topology,
           queueMetrics: sentinelEventQueue.getMetrics(),
@@ -361,6 +421,13 @@ export function createSentinelRouter(
     requireVerifiedFirebaseUser,
     async (req: SentinelAuthenticatedRequest, res: Response) => {
       try {
+        const body = (req.body || {}) as { emergencyStop?: boolean };
+        if (body.emergencyStop) {
+          res.status(423).json({
+            error: 'Global Emergency Stop is engaged. Release Emergency Stop before running correlation.',
+          });
+          return;
+        }
         const uid = req.authUser!.uid;
         const actor = req.authUser!.email || uid;
         await upsertSentinelUser(uid, actor);
@@ -445,11 +512,23 @@ export function createSentinelRouter(
     requireVerifiedFirebaseUser,
     async (req: SentinelAuthenticatedRequest, res: Response) => {
       try {
+        const body = (req.body || {}) as {
+          incidentId?: string;
+          agentId?: string;
+          playbookId?: PlaybookId;
+          emergencyStop?: boolean;
+        };
+        if (body.emergencyStop) {
+          res.status(423).json({
+            error: 'Global Emergency Stop is engaged. Release Emergency Stop before running AI investigations.',
+          });
+          return;
+        }
+
         const uid = req.authUser!.uid;
         const actor = req.authUser!.email || uid;
         await upsertSentinelUser(uid, actor);
 
-        const body = (req.body || {}) as { incidentId?: string; agentId?: string };
         const overview = await getSentinelOverviewForUser(uid);
 
         const existingIncident = body.incidentId
@@ -471,7 +550,7 @@ export function createSentinelRouter(
 
         if (targetEvents.length === 0) {
           res.status(400).json({
-            error: 'No telemetry events available to investigate yet. Enroll an agent or run the Milestone 1 drill first.',
+            error: 'No telemetry events available to investigate yet. Enroll a real Linux agent or run the Milestone 1 synthetic drill first.',
           });
           return;
         }
@@ -481,6 +560,7 @@ export function createSentinelRouter(
           events: targetEvents,
           focusTitle: existingIncident?.title,
           region: existingIncident?.region,
+          playbookId: body.playbookId,
         });
 
         const affectedAgentIds = Array.from(new Set(targetEvents.map((e) => e.agentId)));
@@ -498,6 +578,10 @@ export function createSentinelRouter(
           evidenceEventIds: targetEvents.slice(0, 30).map((e) => e.id),
           mitreTechniques: brainResult.mitreTechniques,
           hypotheses: brainResult.hypotheses,
+          confirmedFacts: brainResult.confirmedFacts,
+          unknowns: brainResult.unknowns,
+          playbookId: brainResult.playbookId,
+          dataOrigin: brainResult.dataOrigin,
           timeline: brainResult.timeline,
           investigationReport: brainResult.investigationReport,
           confidenceScore: brainResult.confidenceScore,
@@ -529,7 +613,13 @@ export function createSentinelRouter(
 
         res.json({
           ok: true,
-          incident,
+          incident: {
+            ...incident,
+            confirmedFacts: brainResult.confirmedFacts,
+            unknowns: brainResult.unknowns,
+            playbookId: brainResult.playbookId,
+            dataOrigin: brainResult.dataOrigin,
+          },
           queuedApprovals,
         });
       } catch (error) {
@@ -544,11 +634,22 @@ export function createSentinelRouter(
     requireVerifiedFirebaseUser,
     async (req: SentinelAuthenticatedRequest, res: Response) => {
       try {
+        const body = (req.body || {}) as {
+          region?: string;
+          hostname?: string;
+          emergencyStop?: boolean;
+        };
+        if (body.emergencyStop) {
+          res.status(423).json({
+            error: 'Global Emergency Stop is engaged. Release Emergency Stop before running drills.',
+          });
+          return;
+        }
+
         const uid = req.authUser!.uid;
         const actor = req.authUser!.email || uid;
         await upsertSentinelUser(uid, actor);
 
-        const body = (req.body || {}) as { region?: string; hostname?: string };
         const region = String(body.region || 'asia-southeast1').trim();
         const hostname =
           String(body.hostname || `sg-linux-sentinel-${crypto.randomBytes(2).toString('hex')}`).trim();
@@ -556,7 +657,7 @@ export function createSentinelRouter(
         const { plainToken } = await createEnrollmentToken({
           userId: uid,
           actor,
-          label: `Milestone 1 Linux Agent (${hostname})`,
+          label: `Milestone 1 Synthetic Drill (${hostname})`,
           region,
           osType: 'linux',
           ttlHours: 1,
@@ -570,7 +671,7 @@ export function createSentinelRouter(
           osVersion: 'Ubuntu 24.04.1 LTS (Linux 6.8)',
           agentVersion: SENTINEL_VERSION,
           region,
-          tags: ['milestone-1', 'authorized-linux'],
+          tags: ['milestone-1', 'synthetic-demo', 'authorized-linux'],
         });
 
         if (!enrolled) {
@@ -591,6 +692,31 @@ export function createSentinelRouter(
             { name: 'nginx', state: 'running', pid: 1120 },
           ],
         });
+
+        if (updatedAgent) {
+          pushTenantHeartbeat(uid, {
+            id: `hb-${crypto.randomUUID().slice(0, 10)}`,
+            agentId: updatedAgent.id,
+            hostname: updatedAgent.hostname,
+            region: updatedAgent.region,
+            health: classifyHeartbeatPingHealth({
+              cpuPercent: updatedAgent.cpuPercent,
+              ramPercent: updatedAgent.ramPercent,
+              diskPercent: updatedAgent.diskPercent,
+              loadAvg1: 0.72,
+              latencyMs: 38,
+              agentStatus: updatedAgent.status,
+            }),
+            cpuPercent: updatedAgent.cpuPercent,
+            ramPercent: updatedAgent.ramPercent,
+            diskPercent: updatedAgent.diskPercent,
+            loadAvg1: 0.72,
+            latencyMs: 38,
+            observedAt: new Date().toISOString(),
+            dataOrigin: 'synthetic_demo',
+            transport: 'https_controller',
+          });
+        }
 
         const nowIso = new Date().toISOString();
         const drillEvents: RawSentinelEventInput[] = [
@@ -660,6 +786,10 @@ export function createSentinelRouter(
           evidenceEventIds: ingested.persisted.map((e) => e.id),
           mitreTechniques: brain.mitreTechniques,
           hypotheses: brain.hypotheses,
+          confirmedFacts: brain.confirmedFacts,
+          unknowns: brain.unknowns,
+          playbookId: brain.playbookId,
+          dataOrigin: 'synthetic_demo',
           timeline: brain.timeline,
           investigationReport: brain.investigationReport,
           confidenceScore: brain.confidenceScore,
@@ -700,6 +830,12 @@ export function createSentinelRouter(
         await upsertSentinelUser(uid, actor);
 
         const body = (req.body || {}) as Record<string, unknown>;
+        if (body.emergencyStop === true) {
+          res.status(423).json({
+            error: 'Global Emergency Stop is engaged. Release Emergency Stop before queuing containment actions.',
+          });
+          return;
+        }
         const validation = validateDefensiveActionRequest({
           agentId: String(body.agentId || ''),
           actionType: String(body.actionType || ''),
@@ -736,7 +872,17 @@ export function createSentinelRouter(
       try {
         const uid = req.authUser!.uid;
         const actor = req.authUser!.email || uid;
-        const body = (req.body || {}) as { decision?: string; decisionNote?: string };
+        const body = (req.body || {}) as {
+          decision?: string;
+          decisionNote?: string;
+          emergencyStop?: boolean;
+        };
+        if (body.emergencyStop === true && body.decision === 'approved') {
+          res.status(423).json({
+            error: 'Global Emergency Stop is engaged. Release Emergency Stop before approving defensive actions.',
+          });
+          return;
+        }
         const decision = body.decision === 'approved' || body.decision === 'rejected' ? body.decision : null;
         if (!decision) {
           res.status(400).json({ error: 'decision must be "approved" or "rejected".' });

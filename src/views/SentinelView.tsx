@@ -4,6 +4,7 @@ import remarkGfm from 'remark-gfm';
 import {
   Activity,
   AlertTriangle,
+  BookOpen,
   BrainCircuit,
   Check,
   CheckCircle2,
@@ -11,6 +12,7 @@ import {
   Clock,
   Cpu,
   FileCheck2,
+  HelpCircle,
   KeyRound,
   Lock,
   Network,
@@ -25,9 +27,16 @@ import {
 } from 'lucide-react';
 import { useSentinel } from '../context/SentinelContext';
 import { SentinelTopologySvg } from '../components/SentinelTopologySvg';
+import { SentinelHeartbeatChart } from '../components/SentinelHeartbeatChart';
+import {
+  SENTINEL_INVESTIGATION_PLAYBOOKS,
+  getPlaybookById,
+} from '../shared/sentinelPlaybooks';
 import {
   SENTINEL_VERSION,
+  type DataOrigin,
   type DefensiveActionType,
+  type PlaybookId,
   type SentinelEventType,
   type SentinelOsType,
 } from '../shared/sentinelTypes';
@@ -79,9 +88,11 @@ function agentStatusClass(status: string): string {
 
 export const SentinelView: React.FC = () => {
   const {
+    isLiveMode,
     agents,
     tokens,
     events,
+    heartbeatHistory,
     incidents,
     approvals,
     auditLogs,
@@ -93,6 +104,7 @@ export const SentinelView: React.FC = () => {
     errorMessage,
     lastIssuedPlainToken,
     refreshOverview,
+    sendFirestoreHeartbeatPing,
     issueEnrollmentToken,
     revokeToken,
     revokeAgent,
@@ -107,6 +119,8 @@ export const SentinelView: React.FC = () => {
 
   const [activeTab, setActiveTab] = useState<SentinelTab>('fleet');
   const [eventFilter, setEventFilter] = useState<SentinelEventType | 'all'>('all');
+  const [originFilter, setOriginFilter] = useState<DataOrigin | 'all'>('all');
+  const [selectedPlaybookId, setSelectedPlaybookId] = useState<PlaybookId>('account_takeover');
   const [selectedIncidentId, setSelectedIncidentId] = useState<string | null>(null);
   const [selectedTopologyNodeId, setSelectedTopologyNodeId] = useState<string | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
@@ -147,9 +161,27 @@ export const SentinelView: React.FC = () => {
   }, [incidents, selectedIncidentId]);
 
   const filteredEvents = useMemo(() => {
-    if (eventFilter === 'all') return events;
-    return events.filter((e) => e.eventType === eventFilter);
-  }, [events, eventFilter]);
+    return events.filter((e) => {
+      if (eventFilter !== 'all' && e.eventType !== eventFilter) return false;
+      const origin: DataOrigin =
+        e.provenance.dataOrigin ||
+        (e.provenance.simulatedDrill ? 'synthetic_demo' : 'real_telemetry');
+      if (originFilter !== 'all' && origin !== originFilter) return false;
+      return true;
+    });
+  }, [events, eventFilter, originFilter]);
+
+  const crossServerAttackTimeline = useMemo(() => {
+    return [...events]
+      .filter((e) => e.severity !== 'info')
+      .sort((a, b) => new Date(a.observedAt).getTime() - new Date(b.observedAt).getTime())
+      .slice(-12);
+  }, [events]);
+
+  const activePlaybook = useMemo(
+    () => getPlaybookById(selectedPlaybookId) || SENTINEL_INVESTIGATION_PLAYBOOKS[0],
+    [selectedPlaybookId]
+  );
 
   const selectedTopoNode = useMemo(() => {
     if (!selectedTopologyNodeId) return topology.nodes[0] || null;
@@ -209,21 +241,25 @@ export const SentinelView: React.FC = () => {
 
   const activeTokenPlain = lastIssuedPlainToken?.plainToken || 'gsen_YOUR_SINGLE_USE_TOKEN';
   const activeTokenRegion = lastIssuedPlainToken?.region || tokenRegion;
+  const isLocalHttp = controllerOrigin.startsWith('http://localhost') || controllerOrigin.startsWith('http://127.0.0.1');
+  const localFlag = isLocalHttp ? ' --allow-insecure-localhost' : '';
 
-  const linuxEnrollCmd = `python3 sentinel-agent/god_sentinel_agent.py --controller ${controllerOrigin} --region ${activeTokenRegion} --enroll ${activeTokenPlain} --once`;
-  const linuxDrillCmd = `python3 sentinel-agent/god_sentinel_agent.py --controller ${controllerOrigin} --simulate-suspicious`;
-  const windowsEnrollCmd = `python sentinel-agent\\god_sentinel_agent.py --controller ${controllerOrigin} --region ${activeTokenRegion} --enroll ${activeTokenPlain} --once`;
+  const linuxEnrollCmd = `python3 sentinel-agent/god_sentinel_agent.py --controller ${controllerOrigin}${localFlag} --region ${activeTokenRegion} --enroll ${activeTokenPlain} --once`;
+  const linuxDrillCmd = `python3 sentinel-agent/god_sentinel_agent.py --controller ${controllerOrigin}${localFlag} --simulate-suspicious`;
+  const goAgentCmd = `cd sentinel-agent && go run SentinelAgent.go --controller ${controllerOrigin}${localFlag} --region ${activeTokenRegion} --enroll ${activeTokenPlain} --interval 15`;
+  const goFirestoreCmd = `cd sentinel-agent && go run SentinelAgent.go --controller ${controllerOrigin}${localFlag} --firestore-project YOUR_PROJECT_ID --firestore-db ai-studio-584e6f80-ce9a-45a2-a4f1-448c9c721cfd --firestore-uid YOUR_UID --firestore-token "$FIREBASE_ID_TOKEN"`;
+  const windowsEnrollCmd = `python sentinel-agent\\god_sentinel_agent.py --controller ${controllerOrigin}${localFlag} --region ${activeTokenRegion} --enroll ${activeTokenPlain} --once`;
 
   return (
     <div className="space-y-6">
       {/* Header Bar */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border-b border-white/[0.08] pb-5">
         <div>
-          <div className="flex items-center gap-2.5">
+          <div className="flex flex-wrap items-center gap-2.5">
             <h1 className="text-2xl font-bold tracking-tight text-white font-display">
               GOD SENTINEL v{SENTINEL_VERSION}
             </h1>
-            <span className="px-2 py-0.5 text-[11px] font-mono uppercase tracking-wider rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+            <span className="px-2 py-0.5 text-[11px] font-mono uppercase tracking-wider rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 whitespace-nowrap shrink-0">
               Defensive Only
             </span>
           </div>
@@ -256,6 +292,37 @@ export const SentinelView: React.FC = () => {
             <span>Refresh</span>
           </button>
         </div>
+      </div>
+
+      {/* Honest Operational Status Banner */}
+      <div
+        role="status"
+        className={`px-4 py-2.5 rounded-xl border text-xs flex flex-wrap items-center justify-between gap-2 ${
+          isLiveMode
+            ? 'bg-emerald-950/20 border-emerald-500/25 text-emerald-200'
+            : 'bg-amber-950/25 border-amber-500/30 text-amber-200'
+        }`}
+      >
+        <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+          <span
+            className={`px-2 py-0.5 rounded font-mono text-[10px] uppercase font-semibold whitespace-nowrap shrink-0 self-start sm:self-auto ${
+              isLiveMode
+                ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                : 'bg-amber-500/20 text-amber-300 border border-amber-500/35'
+            }`}
+          >
+            {isLiveMode ? 'LIVE TELEMETRY ONLY' : 'SYNTHETIC DEMO MODE'}
+          </span>
+          <span>
+            {isLiveMode
+              ? 'Zero fabricated hosts: servers appear online strictly after authenticated enrollment and a verified heartbeat. Optional drills are explicitly tagged SYNTHETIC DEMO.'
+              : 'Preview Session displays clearly labeled synthetic demonstration servers, heartbeats, and findings. Sign in with Google to enroll real Linux/Windows agents.'}
+          </span>
+        </div>
+        <span className="font-mono text-[11px] opacity-80">
+          Real hosts: {agents.filter((a) => a.dataOrigin !== 'synthetic_demo').length} · Demo:{' '}
+          {agents.filter((a) => a.dataOrigin === 'synthetic_demo').length}
+        </span>
       </div>
 
       {/* Error Alert Banner */}
@@ -354,7 +421,16 @@ export const SentinelView: React.FC = () => {
 
       {/* TAB 1: FLEET & HEALTH */}
       {activeTab === 'fleet' && (
-        <div className="space-y-4">
+        <div className="space-y-5">
+          {/* Real-Time 5-Minute Heartbeat Pulse Chart */}
+          <SentinelHeartbeatChart
+            agents={agents}
+            heartbeats={heartbeatHistory}
+            isAuthenticated={isLiveMode}
+            busyAction={busyAction}
+            onSendFirestorePing={sendFirestoreHeartbeatPing}
+          />
+
           <div className="rounded-xl bg-[#0e121b] border border-white/[0.08] overflow-hidden">
             <div className="px-4 py-3 border-b border-white/[0.06] flex flex-wrap items-center justify-between gap-2">
               <h2 className="text-sm font-semibold text-white">Authorized Server Inventory</h2>
@@ -365,8 +441,8 @@ export const SentinelView: React.FC = () => {
 
             {agents.length === 0 ? (
               <div className="p-8 text-center text-sm text-slate-400">
-                No enrolled Sentinel agents yet. Click <strong>Run Milestone 1 Drill</strong> or open{' '}
-                <strong>Enroll &amp; Deploy</strong> to connect your first Linux or Windows server.
+                No enrolled Sentinel agents yet. Open <strong>Enroll &amp; Deploy</strong> to connect your first real Linux or Windows server, or click{' '}
+                <strong>Run Milestone 1 Drill</strong> to run a clearly labeled synthetic verification drill.
               </div>
             ) : (
               <div className="overflow-x-auto">
@@ -384,10 +460,22 @@ export const SentinelView: React.FC = () => {
                   <tbody className="divide-y divide-white/[0.05]">
                     {agents.map((agent) => {
                       const needsUpdate = agent.agentVersion !== SENTINEL_VERSION;
+                      const isDemo = agent.dataOrigin === 'synthetic_demo';
                       return (
                         <tr key={agent.id} className="hover:bg-white/[0.02]">
                           <td className="px-4 py-3 align-top">
-                            <div className="font-semibold text-white">{agent.hostname}</div>
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <span className="font-semibold text-white">{agent.hostname}</span>
+                              <span
+                                className={`px-1.5 py-0.2 rounded text-[9px] font-mono uppercase border ${
+                                  isDemo
+                                    ? 'bg-amber-500/15 text-amber-300 border-amber-500/30'
+                                    : 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+                                }`}
+                              >
+                                {isDemo ? 'SYNTHETIC DEMO' : 'REAL AGENT'}
+                              </span>
+                            </div>
                             <div className="text-[11px] font-mono text-slate-400 mt-0.5">
                               {agent.ipAddress} · {agent.region}
                             </div>
@@ -600,293 +688,537 @@ export const SentinelView: React.FC = () => {
             )}
           </div>
 
-          {/* Normalized Event Pipeline Feed */}
+          {/* Cross-Server Attack Timeline */}
+          <div className="rounded-xl bg-[#0e121b] border border-white/[0.08] p-4 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h2 className="text-sm font-semibold text-white">Cross-Server Attack Timeline</h2>
+                <p className="text-xs text-slate-400">
+                  Chronological sequence of suspicious telemetry correlated across enrolled regional hosts.
+                </p>
+              </div>
+              <span className="text-[11px] font-mono text-slate-500">
+                {crossServerAttackTimeline.length} suspicious event(s)
+              </span>
+            </div>
+            {crossServerAttackTimeline.length === 0 ? (
+              <p className="text-xs text-slate-500 py-2">
+                No suspicious cross-server activity recorded in the current window.
+              </p>
+            ) : (
+              <ol className="space-y-2 border-l border-blue-500/30 pl-4">
+                {crossServerAttackTimeline.map((ev) => {
+                  const isDemo =
+                    ev.provenance.dataOrigin === 'synthetic_demo' || ev.provenance.simulatedDrill;
+                  return (
+                    <li key={`tl-${ev.id}`} className="text-xs space-y-0.5">
+                      <div className="flex flex-wrap items-center gap-2 font-mono text-[11px]">
+                        <span className="text-slate-400">
+                          {new Date(ev.observedAt).toLocaleTimeString()}
+                        </span>
+                        <span className="text-white font-semibold">{ev.hostname}</span>
+                        <span className="text-slate-500">({ev.region})</span>
+                        <span
+                          className={`px-1.5 py-0.2 rounded border text-[10px] uppercase ${severityBadgeClass(
+                            ev.severity
+                          )}`}
+                        >
+                          {ev.severity} · {ev.eventType}
+                        </span>
+                        <span
+                          className={`px-1.5 py-0.2 rounded text-[9px] uppercase ${
+                            isDemo
+                              ? 'bg-amber-500/15 text-amber-300'
+                              : 'bg-emerald-500/15 text-emerald-300'
+                          }`}
+                        >
+                          {isDemo ? 'SYNTHETIC DEMO' : 'REAL TELEMETRY'}
+                        </span>
+                      </div>
+                      <p className="text-slate-300">{ev.summary}</p>
+                    </li>
+                  );
+                })}
+              </ol>
+            )}
+          </div>
+
+          {/* Evidence Repository & Normalized Event Pipeline Feed */}
           <div className="rounded-xl bg-[#0e121b] border border-white/[0.08] overflow-hidden">
             <div className="px-4 py-3 border-b border-white/[0.06] flex flex-wrap items-center justify-between gap-3">
               <div>
                 <h2 className="text-sm font-semibold text-white">
-                  Normalized Event Pipeline &amp; Provenance
+                  Evidence Repository &amp; Normalized Pipeline
                 </h2>
                 <p className="text-[11px] font-mono text-slate-500">
                   Received: {queueMetrics.totalReceived} · Deduplicated:{' '}
                   {queueMetrics.totalDeduplicated} · Stored: {events.length}
                 </p>
               </div>
-              <div className="flex flex-wrap gap-1">
-                {(['all', 'auth', 'process', 'network', 'fim', 'log'] as const).map((type) => (
-                  <button
-                    key={type}
-                    type="button"
-                    onClick={() => setEventFilter(type)}
-                    className={`px-2.5 py-1 rounded text-[11px] font-mono uppercase cursor-pointer ${
-                      eventFilter === type
-                        ? 'bg-blue-600/20 text-blue-300 border border-blue-500/35'
-                        : 'bg-[#0a0d14] text-slate-400 border border-white/[0.06] hover:text-white'
-                    }`}
-                  >
-                    {type}
-                  </button>
-                ))}
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="flex flex-wrap gap-1" role="group" aria-label="Filter evidence by data origin">
+                  {(
+                    [
+                      { id: 'all', label: 'All Origins' },
+                      { id: 'real_telemetry', label: 'Real Only' },
+                      { id: 'synthetic_demo', label: 'Synthetic Demo' },
+                    ] as const
+                  ).map((opt) => (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => setOriginFilter(opt.id)}
+                      className={`px-2 py-1 rounded text-[10px] font-mono uppercase cursor-pointer ${
+                        originFilter === opt.id
+                          ? 'bg-emerald-600/20 text-emerald-300 border border-emerald-500/35'
+                          : 'bg-[#0a0d14] text-slate-400 border border-white/[0.06] hover:text-white'
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+                <div className="flex flex-wrap gap-1" role="group" aria-label="Filter evidence by event type">
+                  {(['all', 'auth', 'process', 'network', 'fim', 'log'] as const).map((type) => (
+                    <button
+                      key={type}
+                      type="button"
+                      onClick={() => setEventFilter(type)}
+                      className={`px-2.5 py-1 rounded text-[11px] font-mono uppercase cursor-pointer ${
+                        eventFilter === type
+                          ? 'bg-blue-600/20 text-blue-300 border border-blue-500/35'
+                          : 'bg-[#0a0d14] text-slate-400 border border-white/[0.06] hover:text-white'
+                      }`}
+                    >
+                      {type}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
 
             <div className="divide-y divide-white/[0.05]">
               {filteredEvents.length === 0 ? (
                 <div className="p-6 text-center text-xs text-slate-500">
-                  No telemetry events match the selected filter.
+                  No telemetry events match the selected origin/type filter.
                 </div>
               ) : (
-                filteredEvents.slice(0, 35).map((ev) => (
-                  <div key={ev.id} className="px-4 py-3 hover:bg-white/[0.02] space-y-1.5">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span
-                          className={`px-1.5 py-0.5 rounded border text-[10px] font-mono uppercase ${severityBadgeClass(
-                            ev.severity
-                          )}`}
-                        >
-                          {ev.severity}
-                        </span>
-                        <span className="px-1.5 py-0.5 rounded bg-white/[0.05] text-[10px] font-mono uppercase text-slate-300">
-                          {ev.eventType}
-                        </span>
-                        <span className="text-xs font-semibold text-white">{ev.hostname}</span>
-                        <span className="text-[11px] font-mono text-slate-500">{ev.region}</span>
-                        {ev.occurrenceCount > 1 && (
-                          <span className="px-1.5 py-0.5 rounded bg-indigo-500/15 border border-indigo-500/30 text-[10px] font-mono text-indigo-300 tabular-nums">
-                            deduped ×{ev.occurrenceCount}
+                filteredEvents.slice(0, 35).map((ev) => {
+                  const isDemo =
+                    ev.provenance.dataOrigin === 'synthetic_demo' || ev.provenance.simulatedDrill;
+                  return (
+                    <div key={ev.id} className="px-4 py-3 hover:bg-white/[0.02] space-y-1.5">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span
+                            className={`px-1.5 py-0.5 rounded border text-[10px] font-mono uppercase ${severityBadgeClass(
+                              ev.severity
+                            )}`}
+                          >
+                            {ev.severity}
                           </span>
-                        )}
-                        {ev.provenance.bufferedOffline && (
-                          <span className="px-1.5 py-0.5 rounded bg-amber-500/15 border border-amber-500/30 text-[10px] font-mono text-amber-300">
-                            offline-replay #{ev.provenance.retryAttempt}
+                          <span className="px-1.5 py-0.5 rounded bg-white/[0.05] text-[10px] font-mono uppercase text-slate-300">
+                            {ev.eventType}
                           </span>
-                        )}
+                          <span
+                            className={`px-1.5 py-0.5 rounded border text-[9px] font-mono uppercase ${
+                              isDemo
+                                ? 'bg-amber-500/15 text-amber-300 border-amber-500/30'
+                                : 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+                            }`}
+                          >
+                            {isDemo ? 'SYNTHETIC DEMO' : 'REAL TELEMETRY'}
+                          </span>
+                          <span className="text-xs font-semibold text-white">{ev.hostname}</span>
+                          <span className="text-[11px] font-mono text-slate-500">{ev.region}</span>
+                          {ev.occurrenceCount > 1 && (
+                            <span className="px-1.5 py-0.5 rounded bg-indigo-500/15 border border-indigo-500/30 text-[10px] font-mono text-indigo-300 tabular-nums">
+                              deduped ×{ev.occurrenceCount}
+                            </span>
+                          )}
+                          {ev.provenance.bufferedOffline && (
+                            <span className="px-1.5 py-0.5 rounded bg-amber-500/15 border border-amber-500/30 text-[10px] font-mono text-amber-300">
+                              offline-replay #{ev.provenance.retryAttempt}
+                            </span>
+                          )}
+                        </div>
+                        <span className="text-[11px] font-mono text-slate-500">
+                          {formatRelativeTime(ev.observedAt)} · {ev.provenance.collector}
+                        </span>
                       </div>
-                      <span className="text-[11px] font-mono text-slate-500">
-                        {formatRelativeTime(ev.observedAt)} · {ev.provenance.collector}
-                      </span>
+                      <p className="text-xs text-slate-200">{ev.summary}</p>
+                      <p className="text-[11px] font-mono text-slate-500 truncate">
+                        id:{ev.id} · fp:{ev.fingerprint} · payload:{JSON.stringify(ev.payload)}
+                      </p>
                     </div>
-                    <p className="text-xs text-slate-200">{ev.summary}</p>
-                    <p className="text-[11px] font-mono text-slate-500 truncate">
-                      fp:{ev.fingerprint} · payload:{JSON.stringify(ev.payload)}
-                    </p>
-                  </div>
-                ))
+                  );
+                })
               )}
             </div>
           </div>
         </div>
       )}
 
-      {/* TAB 3: INCIDENTS & GOD CENTRAL BRAIN */}
+      {/* TAB 3: INCIDENTS & GOD CENTRAL BRAIN (10 PLAYBOOKS) */}
       {activeTab === 'incidents' && (
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
-          {/* Incident List */}
-          <div className="lg:col-span-4 space-y-3">
-            <div className="flex items-center justify-between">
-              <h2 className="text-sm font-semibold text-white">Incident Cases</h2>
+        <div className="space-y-5">
+          {/* 10 GOD Investigator Playbooks Bar */}
+          <div className="rounded-xl bg-[#0e121b] border border-white/[0.08] p-4 space-y-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <BookOpen className="w-4 h-4 text-blue-400 shrink-0" />
+                <div>
+                  <h2 className="text-sm font-semibold text-white">
+                    GOD Investigator Playbooks (10 Defensive Scenarios)
+                  </h2>
+                  <p className="text-xs text-slate-400">
+                    Every investigation cites exact telemetry IDs and separates Confirmed Facts, Hypotheses, and Unknowns.
+                  </p>
+                </div>
+              </div>
               <button
                 type="button"
-                onClick={() => void runBrainInvestigation()}
+                onClick={() => void runBrainInvestigation({ playbookId: selectedPlaybookId })}
                 disabled={busyAction !== null}
-                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs font-semibold cursor-pointer"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs font-semibold shrink-0 cursor-pointer"
               >
                 <BrainCircuit className="w-3.5 h-3.5" />
                 <span>
-                  {busyAction === 'investigate' ? 'Analyzing...' : 'New Gemini Investigation'}
+                  {busyAction === 'investigate'
+                    ? 'Running Playbook...'
+                    : 'Run Selected Playbook'}
                 </span>
               </button>
             </div>
 
-            {incidents.length === 0 ? (
-              <div className="p-5 rounded-xl bg-[#0e121b] border border-white/[0.08] text-xs text-slate-400">
-                No incident cases recorded yet. Run the Milestone 1 drill or click{' '}
-                <strong>New Gemini Investigation</strong>.
-              </div>
-            ) : (
-              <div className="space-y-2">
-                {incidents.map((inc) => {
-                  const active = selectedIncident?.id === inc.id;
-                  return (
-                    <button
-                      key={inc.id}
-                      type="button"
-                      onClick={() => setSelectedIncidentId(inc.id)}
-                      className={`w-full text-left p-3.5 rounded-xl border transition-colors cursor-pointer ${
-                        active
-                          ? 'bg-blue-600/10 border-blue-500/40'
-                          : 'bg-[#0e121b] border-white/[0.08] hover:border-white/[0.18]'
-                      }`}
+            <div
+              role="group"
+              aria-label="Select defensive investigation playbook"
+              className="flex flex-wrap gap-1.5"
+            >
+              {SENTINEL_INVESTIGATION_PLAYBOOKS.map((pb) => {
+                const isSel = pb.id === selectedPlaybookId;
+                return (
+                  <button
+                    key={pb.id}
+                    type="button"
+                    aria-pressed={isSel}
+                    onClick={() => setSelectedPlaybookId(pb.id)}
+                    className={`px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
+                      isSel
+                        ? 'bg-blue-600/20 text-white border border-blue-500/45'
+                        : 'bg-[#0a0d14] text-slate-400 hover:text-white border border-white/[0.07]'
+                    }`}
+                  >
+                    {pb.name}
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="p-3 rounded-lg bg-[#0a0d14] border border-white/[0.06] grid grid-cols-1 md:grid-cols-12 gap-3 text-xs">
+              <div className="md:col-span-7 space-y-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-semibold text-white">{activePlaybook.name}</span>
+                  <span className="text-[10px] font-mono uppercase text-slate-400">
+                    {activePlaybook.category}
+                  </span>
+                  {activePlaybook.mitreTechniques.map((t) => (
+                    <span
+                      key={t}
+                      className="px-1.5 py-0.2 rounded bg-blue-500/15 border border-blue-500/30 font-mono text-[10px] text-blue-300"
                     >
-                      <div className="flex items-center justify-between gap-2">
-                        <span
-                          className={`px-1.5 py-0.5 rounded border text-[10px] font-mono uppercase ${severityBadgeClass(
-                            inc.severity
-                          )}`}
-                        >
-                          {inc.severity}
-                        </span>
-                        <span className="text-[11px] font-mono text-slate-500">
-                          {inc.confidenceScore}% conf
-                        </span>
-                      </div>
-                      <p className="mt-2 text-xs font-semibold text-white line-clamp-2">
-                        {inc.title}
-                      </p>
-                      <p className="mt-1 text-[11px] font-mono text-slate-500">
-                        {inc.region} · {inc.mitreTechniques.length} ATT&amp;CK ·{' '}
-                        {formatRelativeTime(inc.updatedAt)}
-                      </p>
-                    </button>
-                  );
-                })}
+                      {t}
+                    </span>
+                  ))}
+                </div>
+                <p className="text-slate-400">{activePlaybook.summary}</p>
               </div>
-            )}
+              <div className="md:col-span-5 space-y-1 border-t md:border-t-0 md:border-l border-white/[0.06] pt-2 md:pt-0 md:pl-3">
+                <p className="text-[10px] font-mono uppercase text-slate-500">Key Telemetry Signals</p>
+                <ul className="text-[11px] text-slate-300 list-disc list-inside space-y-0.5">
+                  {activePlaybook.telemetrySignals.slice(0, 2).map((sig, i) => (
+                    <li key={i}>{sig}</li>
+                  ))}
+                </ul>
+              </div>
+            </div>
           </div>
 
-          {/* Investigation Detail Workspace */}
-          <div className="lg:col-span-8">
-            {!selectedIncident ? (
-              <div className="p-8 rounded-xl bg-[#0e121b] border border-white/[0.08] text-center text-sm text-slate-500">
-                Select an incident case to inspect GOD Central Brain reasoning, MITRE ATT&amp;CK mappings, hypotheses, and timeline.
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+            {/* Incident List */}
+            <div className="lg:col-span-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <h2 className="text-sm font-semibold text-white">Incident Cases</h2>
+                <button
+                  type="button"
+                  onClick={() => void runBrainInvestigation({ playbookId: selectedPlaybookId })}
+                  disabled={busyAction !== null}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-[#151c2c] hover:bg-[#1c253a] border border-blue-500/30 disabled:opacity-50 text-blue-300 text-xs font-semibold cursor-pointer"
+                >
+                  <BrainCircuit className="w-3.5 h-3.5" />
+                  <span>
+                    {busyAction === 'investigate' ? 'Analyzing...' : 'New Gemini Investigation'}
+                  </span>
+                </button>
               </div>
-            ) : (
-              <div className="rounded-xl bg-[#0e121b] border border-white/[0.08] p-5 space-y-5">
-                <div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/[0.06] pb-4">
-                  <div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span
-                        className={`px-2 py-0.5 rounded border text-[11px] font-mono uppercase ${severityBadgeClass(
-                          selectedIncident.severity
-                        )}`}
-                      >
-                        {selectedIncident.severity}
-                      </span>
-                      <span className="px-2 py-0.5 rounded bg-white/[0.06] text-[11px] font-mono uppercase text-slate-300">
-                        {selectedIncident.status}
-                      </span>
-                      <span className="text-xs font-mono text-slate-500">
-                        Confidence {selectedIncident.confidenceScore}% · {selectedIncident.region}
-                      </span>
-                    </div>
-                    <h2 className="mt-2 text-lg font-bold text-white">{selectedIncident.title}</h2>
-                  </div>
 
-                  <button
-                    type="button"
-                    onClick={() =>
-                      void runBrainInvestigation({ incidentId: selectedIncident.id })
-                    }
-                    disabled={busyAction !== null}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#151c2c] hover:bg-[#1c253a] border border-blue-500/30 text-blue-300 text-xs font-semibold cursor-pointer"
-                  >
-                    <BrainCircuit className="w-3.5 h-3.5" />
-                    <span>
-                      {busyAction === 'investigate'
-                        ? 'Re-analyzing...'
-                        : 'Re-Run Gemini Investigation'}
-                    </span>
-                  </button>
+              {incidents.length === 0 ? (
+                <div className="p-5 rounded-xl bg-[#0e121b] border border-white/[0.08] text-xs text-slate-400">
+                  No incident cases recorded yet. Connect a real Linux agent or run the Milestone 1 drill, then launch a Playbook Investigation.
                 </div>
-
-                {/* MITRE ATT&CK Mappings */}
+              ) : (
                 <div className="space-y-2">
-                  <h3 className="text-xs font-mono uppercase tracking-wider text-slate-400">
-                    MITRE ATT&amp;CK Technique Mapping
-                  </h3>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                    {selectedIncident.mitreTechniques.map((m) => (
-                      <div
-                        key={m.techniqueId}
-                        className="p-3 rounded-lg bg-[#0a0d14] border border-white/[0.07]"
+                  {incidents.map((inc) => {
+                    const active = selectedIncident?.id === inc.id;
+                    const isDemo = inc.dataOrigin === 'synthetic_demo';
+                    return (
+                      <button
+                        key={inc.id}
+                        type="button"
+                        onClick={() => setSelectedIncidentId(inc.id)}
+                        className={`w-full text-left p-3.5 rounded-xl border transition-colors cursor-pointer ${
+                          active
+                            ? 'bg-blue-600/10 border-blue-500/40'
+                            : 'bg-[#0e121b] border-white/[0.08] hover:border-white/[0.18]'
+                        }`}
                       >
                         <div className="flex items-center justify-between gap-2">
-                          <span className="text-xs font-mono font-bold text-blue-300">
-                            {m.techniqueId} · {m.tactic}
-                          </span>
-                          <span className="text-[11px] font-mono text-slate-400 tabular-nums">
-                            {m.confidence}%
-                          </span>
-                        </div>
-                        <p className="text-xs font-semibold text-white mt-1">{m.name}</p>
-                        <p className="text-[11px] text-slate-400 mt-1">{m.evidenceSummary}</p>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Hypotheses */}
-                <div className="space-y-2">
-                  <h3 className="text-xs font-mono uppercase tracking-wider text-slate-400">
-                    Evidence-Based Hypotheses
-                  </h3>
-                  <div className="space-y-2">
-                    {selectedIncident.hypotheses.map((hyp) => (
-                      <div
-                        key={hyp.id}
-                        className="p-3.5 rounded-lg bg-[#0a0d14] border border-white/[0.07] space-y-2"
-                      >
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="text-xs font-semibold text-white">{hyp.title}</span>
-                          <span
-                            className={`px-1.5 py-0.5 rounded border text-[10px] font-mono uppercase ${
-                              hyp.likelihood === 'high'
-                                ? 'bg-red-500/15 text-red-300 border-red-500/30'
-                                : hyp.likelihood === 'medium'
-                                  ? 'bg-amber-500/15 text-amber-300 border-amber-500/30'
-                                  : 'bg-slate-500/15 text-slate-300 border-slate-500/30'
-                            }`}
-                          >
-                            {hyp.likelihood} likelihood
+                          <div className="flex items-center gap-1.5">
+                            <span
+                              className={`px-1.5 py-0.5 rounded border text-[10px] font-mono uppercase ${severityBadgeClass(
+                                inc.severity
+                              )}`}
+                            >
+                              {inc.severity}
+                            </span>
+                            {isDemo && (
+                              <span className="px-1.5 py-0.5 rounded bg-amber-500/15 border border-amber-500/30 text-[9px] font-mono uppercase text-amber-300">
+                                DEMO
+                              </span>
+                            )}
+                          </div>
+                          <span className="text-[11px] font-mono text-slate-500">
+                            {inc.confidenceScore}% conf
                           </span>
                         </div>
-                        <ul className="text-[11px] text-slate-300 space-y-1 list-disc list-inside">
-                          {hyp.supportingEvidence.map((item, i) => (
-                            <li key={i}>{item}</li>
-                          ))}
-                        </ul>
-                        {hyp.refutingOrGaps.length > 0 && (
-                          <p className="text-[11px] text-slate-500">
-                            <strong>Verification gaps:</strong> {hyp.refutingOrGaps.join(' ')}
-                          </p>
-                        )}
-                      </div>
-                    ))}
-                  </div>
+                        <p className="mt-2 text-xs font-semibold text-white line-clamp-2">
+                          {inc.title}
+                        </p>
+                        <p className="mt-1 text-[11px] font-mono text-slate-500">
+                          {inc.region} · {inc.mitreTechniques.length} ATT&amp;CK ·{' '}
+                          {formatRelativeTime(inc.updatedAt)}
+                        </p>
+                      </button>
+                    );
+                  })}
                 </div>
+              )}
+            </div>
 
-                {/* Chronological Timeline */}
-                <div className="space-y-2">
-                  <h3 className="text-xs font-mono uppercase tracking-wider text-slate-400">
-                    Incident Timeline
-                  </h3>
-                  <div className="space-y-1.5 border-l border-white/[0.1] pl-3.5">
-                    {selectedIncident.timeline.map((entry, idx) => (
-                      <div key={idx} className="text-xs">
-                        <span className="font-mono text-[11px] text-slate-500">
-                          {new Date(entry.timestamp).toLocaleTimeString()} · {entry.hostname} ·{' '}
-                          {entry.eventType.toUpperCase()}
+            {/* Investigation Detail Workspace */}
+            <div className="lg:col-span-8">
+              {!selectedIncident ? (
+                <div className="p-8 rounded-xl bg-[#0e121b] border border-white/[0.08] text-center text-sm text-slate-500">
+                  Select an incident case to inspect GOD Central Brain reasoning, Confirmed Facts, Hypotheses, Unknowns, MITRE ATT&amp;CK mappings, and timeline.
+                </div>
+              ) : (
+                <div className="rounded-xl bg-[#0e121b] border border-white/[0.08] p-5 space-y-5">
+                  <div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/[0.06] pb-4">
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span
+                          className={`px-2 py-0.5 rounded border text-[11px] font-mono uppercase ${severityBadgeClass(
+                            selectedIncident.severity
+                          )}`}
+                        >
+                          {selectedIncident.severity}
                         </span>
-                        <p className="text-slate-200">{entry.description}</p>
+                        <span className="px-2 py-0.5 rounded bg-white/[0.06] text-[11px] font-mono uppercase text-slate-300">
+                          {selectedIncident.status}
+                        </span>
+                        <span
+                          className={`px-2 py-0.5 rounded border text-[10px] font-mono uppercase ${
+                            selectedIncident.dataOrigin === 'synthetic_demo'
+                              ? 'bg-amber-500/15 text-amber-300 border-amber-500/30'
+                              : 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+                          }`}
+                        >
+                          {selectedIncident.dataOrigin === 'synthetic_demo'
+                            ? 'SYNTHETIC DEMO'
+                            : 'REAL TELEMETRY'}
+                        </span>
+                        {selectedIncident.playbookId && (
+                          <span className="px-2 py-0.5 rounded bg-blue-500/15 border border-blue-500/30 text-[10px] font-mono uppercase text-blue-300">
+                            Playbook: {selectedIncident.playbookId.replace(/_/g, ' ')}
+                          </span>
+                        )}
+                        <span className="text-xs font-mono text-slate-500">
+                          Confidence {selectedIncident.confidenceScore}% · {selectedIncident.region}
+                        </span>
                       </div>
-                    ))}
-                  </div>
-                </div>
+                      <h2 className="mt-2 text-lg font-bold text-white">{selectedIncident.title}</h2>
+                    </div>
 
-                {/* Investigation Markdown Report */}
-                <div className="space-y-2 pt-2 border-t border-white/[0.06]">
-                  <h3 className="text-xs font-mono uppercase tracking-wider text-slate-400">
-                    Central Brain Technical Report
-                  </h3>
-                  <div className="prose prose-invert prose-sm max-w-none text-slate-300 bg-[#0a0d14] p-4 rounded-lg border border-white/[0.07]">
-                    <Markdown remarkPlugins={[remarkGfm]}>
-                      {selectedIncident.investigationReport}
-                    </Markdown>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        void runBrainInvestigation({
+                          incidentId: selectedIncident.id,
+                          playbookId: selectedPlaybookId,
+                        })
+                      }
+                      disabled={busyAction !== null}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#151c2c] hover:bg-[#1c253a] border border-blue-500/30 text-blue-300 text-xs font-semibold cursor-pointer"
+                    >
+                      <BrainCircuit className="w-3.5 h-3.5" />
+                      <span>
+                        {busyAction === 'investigate'
+                          ? 'Re-analyzing...'
+                          : 'Re-Run Gemini Investigation'}
+                      </span>
+                    </button>
+                  </div>
+
+                  {/* Confirmed Facts (Cited Telemetry Evidence) */}
+                  <div className="p-3.5 rounded-lg bg-emerald-950/15 border border-emerald-500/25 space-y-2">
+                    <div className="flex items-center gap-2">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                      <h3 className="text-xs font-mono uppercase tracking-wider text-emerald-300">
+                        Confirmed Facts (Cited Telemetry Evidence)
+                      </h3>
+                    </div>
+                    <ul className="text-xs text-slate-200 space-y-1 list-disc list-inside">
+                      {(selectedIncident.confirmedFacts && selectedIncident.confirmedFacts.length > 0
+                        ? selectedIncident.confirmedFacts
+                        : selectedIncident.timeline.map(
+                            (t) =>
+                              `[${t.eventId || t.eventType}] ${t.hostname}: ${t.description}`
+                          )
+                      ).map((fact, idx) => (
+                        <li key={idx}>{fact}</li>
+                      ))}
+                    </ul>
+                  </div>
+
+                  {/* Evidence-Based Hypotheses */}
+                  <div className="space-y-2">
+                    <h3 className="text-xs font-mono uppercase tracking-wider text-slate-400">
+                      Evidence-Based Hypotheses (Not Yet Proven)
+                    </h3>
+                    <div className="space-y-2">
+                      {selectedIncident.hypotheses.map((hyp) => (
+                        <div
+                          key={hyp.id}
+                          className="p-3.5 rounded-lg bg-[#0a0d14] border border-white/[0.07] space-y-2"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-xs font-semibold text-white">{hyp.title}</span>
+                            <span
+                              className={`px-1.5 py-0.5 rounded border text-[10px] font-mono uppercase ${
+                                hyp.likelihood === 'high'
+                                  ? 'bg-red-500/15 text-red-300 border-red-500/30'
+                                  : hyp.likelihood === 'medium'
+                                    ? 'bg-amber-500/15 text-amber-300 border-amber-500/30'
+                                    : 'bg-slate-500/15 text-slate-300 border-slate-500/30'
+                              }`}
+                            >
+                              {hyp.likelihood} likelihood
+                            </span>
+                          </div>
+                          <ul className="text-[11px] text-slate-300 space-y-1 list-disc list-inside">
+                            {hyp.supportingEvidence.map((item, i) => (
+                              <li key={i}>{item}</li>
+                            ))}
+                          </ul>
+                          {hyp.refutingOrGaps.length > 0 && (
+                            <p className="text-[11px] text-slate-500">
+                              <strong>Verification gaps:</strong> {hyp.refutingOrGaps.join(' ')}
+                            </p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Unknowns & Verification Gaps */}
+                  <div className="p-3.5 rounded-lg bg-amber-950/15 border border-amber-500/25 space-y-2">
+                    <div className="flex items-center gap-2">
+                      <HelpCircle className="w-4 h-4 text-amber-400 shrink-0" />
+                      <h3 className="text-xs font-mono uppercase tracking-wider text-amber-300">
+                        Unknowns &amp; Operator Verification Checklist
+                      </h3>
+                    </div>
+                    <ul className="text-xs text-slate-300 space-y-1 list-disc list-inside">
+                      {(selectedIncident.unknowns && selectedIncident.unknowns.length > 0
+                        ? selectedIncident.unknowns
+                        : [
+                            'Metadata-only Sentinel agents do not capture packet payloads or file contents; verify host-level artifacts before containment.',
+                          ]
+                      ).map((gap, idx) => (
+                        <li key={idx}>{gap}</li>
+                      ))}
+                    </ul>
+                  </div>
+
+                  {/* MITRE ATT&CK Mappings */}
+                  <div className="space-y-2">
+                    <h3 className="text-xs font-mono uppercase tracking-wider text-slate-400">
+                      MITRE ATT&amp;CK Technique Mapping
+                    </h3>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                      {selectedIncident.mitreTechniques.map((m) => (
+                        <div
+                          key={m.techniqueId}
+                          className="p-3 rounded-lg bg-[#0a0d14] border border-white/[0.07]"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-xs font-mono font-bold text-blue-300">
+                              {m.techniqueId} · {m.tactic}
+                            </span>
+                            <span className="text-[11px] font-mono text-slate-400 tabular-nums">
+                              {m.confidence}%
+                            </span>
+                          </div>
+                          <p className="text-xs font-semibold text-white mt-1">{m.name}</p>
+                          <p className="text-[11px] text-slate-400 mt-1">{m.evidenceSummary}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Chronological Timeline */}
+                  <div className="space-y-2">
+                    <h3 className="text-xs font-mono uppercase tracking-wider text-slate-400">
+                      Incident Timeline
+                    </h3>
+                    <div className="space-y-1.5 border-l border-white/[0.1] pl-3.5">
+                      {selectedIncident.timeline.map((entry, idx) => (
+                        <div key={idx} className="text-xs">
+                          <span className="font-mono text-[11px] text-slate-500">
+                            {new Date(entry.timestamp).toLocaleTimeString()} · {entry.hostname} ·{' '}
+                            {entry.eventType.toUpperCase()}
+                          </span>
+                          <p className="text-slate-200">{entry.description}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Investigation Markdown Report */}
+                  <div className="space-y-2 pt-2 border-t border-white/[0.06]">
+                    <h3 className="text-xs font-mono uppercase tracking-wider text-slate-400">
+                      Central Brain Technical Report
+                    </h3>
+                    <div className="prose prose-invert prose-sm max-w-none text-slate-300 bg-[#0a0d14] p-4 rounded-lg border border-white/[0.07]">
+                      <Markdown remarkPlugins={[remarkGfm]}>
+                        {selectedIncident.investigationReport}
+                      </Markdown>
+                    </div>
                   </div>
                 </div>
-              </div>
-            )}
+              )}
+            </div>
           </div>
         </div>
       )}
@@ -1386,7 +1718,53 @@ export const SentinelView: React.FC = () => {
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between text-xs">
                   <span className="text-slate-300 font-medium">
-                    3. Windows Server Enrollment (PowerShell)
+                    3. Go Micro-Agent (<code>SentinelAgent.go</code> — HTTPS Controller + System Load Metrics)
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => void copySnippet('go_enroll', goAgentCmd)}
+                    className="inline-flex items-center gap-1 text-[11px] text-blue-300 hover:text-white cursor-pointer"
+                  >
+                    {copiedKey === 'go_enroll' ? (
+                      <Check className="w-3 h-3" />
+                    ) : (
+                      <ClipboardCopy className="w-3 h-3" />
+                    )}
+                    <span>{copiedKey === 'go_enroll' ? 'Copied' : 'Copy'}</span>
+                  </button>
+                </div>
+                <pre className="p-3 rounded-lg bg-[#080b12] border border-white/[0.06] text-[11px] font-mono text-slate-200 overflow-x-auto">
+                  {goAgentCmd}
+                </pre>
+              </div>
+
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-slate-300 font-medium">
+                    4. Go Agent Direct Firestore Heartbeat Stream (<code>users/&#123;uid&#125;/sentinelHeartbeats</code>)
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => void copySnippet('go_fs', goFirestoreCmd)}
+                    className="inline-flex items-center gap-1 text-[11px] text-blue-300 hover:text-white cursor-pointer"
+                  >
+                    {copiedKey === 'go_fs' ? (
+                      <Check className="w-3 h-3" />
+                    ) : (
+                      <ClipboardCopy className="w-3 h-3" />
+                    )}
+                    <span>{copiedKey === 'go_fs' ? 'Copied' : 'Copy'}</span>
+                  </button>
+                </div>
+                <pre className="p-3 rounded-lg bg-[#080b12] border border-white/[0.06] text-[11px] font-mono text-slate-200 overflow-x-auto">
+                  {goFirestoreCmd}
+                </pre>
+              </div>
+
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-slate-300 font-medium">
+                    5. Windows Server Enrollment (PowerShell)
                   </span>
                   <button
                     type="button"

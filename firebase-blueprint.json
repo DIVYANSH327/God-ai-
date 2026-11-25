@@ -154,7 +154,7 @@
         "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "action": { "type": "string", "minLength": 1, "maxLength": 80 },
-        "category": { "type": "string", "enum": ["auth", "chat", "security", "settings", "memory", "task", "network", "research", "knowledge", "behaviour"], "maxLength": 24 },
+        "category": { "type": "string", "enum": ["auth", "chat", "security", "sentinel", "settings", "memory", "task", "network", "research", "knowledge", "behaviour"], "maxLength": 24 },
         "severity": { "type": "string", "enum": ["info", "warning", "critical"], "maxLength": 16 },
         "summary": { "type": "string", "minLength": 1, "maxLength": 320 },
         "createdAt": { "type": "string", "format": "date-time" }
@@ -303,6 +303,27 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["id", "userId", "name", "target", "monitorType", "cadence", "rateLimitPerHour", "sourcePolicy", "enabled", "lastRunSummary", "lastRunAtMs", "createdAt", "updatedAt"]
+    },
+    "SentinelHeartbeat": {
+      "title": "SentinelHeartbeat",
+      "description": "Real-time server health heartbeat ping transmitted by SentinelAgent.go or the GOD Sentinel controller and streamed by SentinelProvider.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "agentId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "hostname": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "region": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "health": { "type": "string", "enum": ["healthy", "warning", "critical"], "maxLength": 16 },
+        "cpuPercent": { "type": "integer" },
+        "ramPercent": { "type": "integer" },
+        "diskPercent": { "type": "integer" },
+        "loadAvg1": { "type": "number" },
+        "latencyMs": { "type": "integer" },
+        "dataOrigin": { "type": "string", "enum": ["real_telemetry", "synthetic_demo"], "maxLength": 24 },
+        "observedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "userId", "agentId", "hostname", "region", "health", "cpuPercent", "ramPercent", "diskPercent", "loadAvg1", "latencyMs", "dataOrigin", "observedAt"]
     }
   },
   "firestore": {
@@ -357,6 +378,10 @@
     "/users/{userId}/researchMonitors/{monitorId}": {
       "schema": { "$ref": "#/entities/ResearchMonitor" },
       "description": "User-isolated GRI v0.5 continuous discovery monitors with configurable rate limits and source policies."
+    },
+    "/users/{userId}/sentinelHeartbeats/{heartbeatId}": {
+      "schema": { "$ref": "#/entities/SentinelHeartbeat" },
+      "description": "User-isolated real-time Sentinel server health heartbeat pings streamed to the 5-minute pulse chart."
     }
   }
 }

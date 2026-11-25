@@ -381,7 +381,8 @@ function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
   return union === 0 ? 0 : intersection / union;
 }
 
-const NEGATION_MARKERS = /\b(not|never|no|disabled|prohibited|forbidden|inactive|false|cannot|without)\b/i;
+const NEGATION_MARKERS =
+  /\b(not|never|no|none|zero|disabled|prohibited|forbidden|disallowed|inactive|false|cannot|without|forbids|blocks)\b/i;
 
 /**
  * Pure Knowledge Graph duplicate & contradictory claim detector.
@@ -421,6 +422,15 @@ export function detectKnowledgeConflicts(nodes: readonly KnowledgeNodeRecord[]):
             nodeBId: b.id,
             nodeBLabel: b.label,
             reason: `Conflicting assertion polarity detected between "${a.sourceTitle}" and "${b.sourceTitle}". Review source timestamps and confidence.`,
+          });
+        } else if (sameLabel && claimSim < 0.72) {
+          findings.push({
+            kind: 'contradiction',
+            nodeAId: a.id,
+            nodeALabel: a.label,
+            nodeBId: b.id,
+            nodeBLabel: b.label,
+            reason: `Divergent observations for "${a.label}" recorded across "${a.sourceTitle}" and "${b.sourceTitle}". Both claims are preserved side-by-side without overwriting.`,
           });
         }
       }

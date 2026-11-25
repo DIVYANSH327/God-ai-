@@ -47,7 +47,9 @@ export const KnowledgeGraphView: React.FC = () => {
   const [sourceTitle, setSourceTitle] = useState('');
   const [sourceUri, setSourceUri] = useState('');
   const [confidenceScore, setConfidenceScore] = useState('85');
+  const [confidenceExplanation, setConfidenceExplanation] = useState('');
   const [nodeError, setNodeError] = useState<string | null>(null);
+  const [nodeNotice, setNodeNotice] = useState<string | null>(null);
 
   // Link relation state
   const [linkTargetId, setLinkTargetId] = useState('');
@@ -96,6 +98,7 @@ export const KnowledgeGraphView: React.FC = () => {
   const handleAddNode = async (e: React.FormEvent) => {
     e.preventDefault();
     setNodeError(null);
+    setNodeNotice(null);
     const res = await addKnowledgeNode({
       label,
       entityType,
@@ -103,14 +106,21 @@ export const KnowledgeGraphView: React.FC = () => {
       sourceTitle,
       sourceUri,
       confidenceScore: Number(confidenceScore) || 80,
+      confidenceExplanation,
     });
     if (!res.ok) {
       setNodeError(res.error || 'Could not add knowledge entity.');
     } else {
+      if (res.conflictDetected) {
+        setNodeNotice(res.conflictDetected);
+      } else {
+        setNodeNotice(`Stored "${label}" with timestamp and source provenance.`);
+      }
       setLabel('');
       setClaim('');
       setSourceTitle('');
       setSourceUri('');
+      setConfidenceExplanation('');
     }
   };
 
@@ -335,7 +345,7 @@ export const KnowledgeGraphView: React.FC = () => {
                 <p className="text-xs text-slate-300 leading-relaxed">{selectedNode.claim}</p>
               </div>
 
-              <div className="pt-3 border-t border-white/[0.06] space-y-1 text-xs">
+              <div className="pt-3 border-t border-white/[0.06] space-y-1.5 text-xs">
                 <p className="text-slate-400">
                   Source: <span className="text-slate-200">{selectedNode.sourceTitle}</span>
                 </p>
@@ -350,9 +360,23 @@ export const KnowledgeGraphView: React.FC = () => {
                     <ExternalLink className="w-3 h-3 shrink-0" />
                   </a>
                 )}
-                <p className="font-mono text-[11px] text-slate-500 tabular-nums">
-                  Updated: {new Date(selectedNode.updatedAtMs).toLocaleString()}
-                </p>
+                <div className="p-2.5 rounded-lg bg-[#090b10] border border-white/[0.06] space-y-1">
+                  <p className="text-[10px] font-mono uppercase tracking-wider text-slate-500">
+                    Confidence Explanation ({selectedNode.confidenceScore}%)
+                  </p>
+                  <p className="text-[11px] text-slate-300 leading-relaxed">
+                    {selectedNode.confidenceExplanation ||
+                      `${selectedNode.confidenceScore}% calibrated from "${selectedNode.sourceTitle}"${
+                        selectedNode.sourceUri
+                          ? ' with verifiable external citation URL.'
+                          : ' (internal/operator observation without external URI).'
+                      }`}
+                  </p>
+                </div>
+                <div className="font-mono text-[11px] text-slate-500 tabular-nums space-y-0.5">
+                  <p>Observed: {new Date(selectedNode.createdAtMs).toLocaleString()}</p>
+                  <p>Updated: {new Date(selectedNode.updatedAtMs).toLocaleString()}</p>
+                </div>
               </div>
 
               {/* Outgoing & Incoming edges + Link form */}
@@ -596,9 +620,32 @@ export const KnowledgeGraphView: React.FC = () => {
             />
           </div>
 
+          <div className="space-y-1">
+            <label htmlFor="kg-conf-explain" className="block text-xs text-slate-300">
+              Confidence Explanation (optional)
+            </label>
+            <input
+              id="kg-conf-explain"
+              type="text"
+              value={confidenceExplanation}
+              onChange={(e) => setConfidenceExplanation(e.target.value)}
+              placeholder="Why this confidence score? (e.g., corroborated by 2 independent logs)"
+              maxLength={240}
+              className="w-full px-3 py-2 text-xs bg-[#090b10] border border-white/[0.1] rounded-lg text-white placeholder:text-slate-500 focus:outline-none focus:border-blue-500"
+            />
+            <p className="text-[11px] text-slate-500">
+              Conflicting claims for an existing entity label are preserved side-by-side and auto-linked via <code>[contradicts]</code> — never silently overwritten.
+            </p>
+          </div>
+
           {nodeError && (
             <p role="alert" className="text-xs text-red-400">
               {nodeError}
+            </p>
+          )}
+          {nodeNotice && (
+            <p role="status" className="text-xs text-amber-300 bg-amber-950/30 border border-amber-500/30 rounded-lg px-3 py-2">
+              {nodeNotice}
             </p>
           )}
 

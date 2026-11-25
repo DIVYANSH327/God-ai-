@@ -65,6 +65,11 @@ function mapAgentRow(row: typeof sentinelAgents.$inferSelect): SentinelAgentReco
     lastHeartbeatAt: row.lastHeartbeatAt ? row.lastHeartbeatAt.toISOString() : null,
     enrolledAt: row.enrolledAt.toISOString(),
     revokedAt: row.revokedAt ? row.revokedAt.toISOString() : null,
+    dataOrigin: safeJsonParse<string[]>(row.tagsJson, []).some(
+      (t) => t === 'synthetic-demo' || t === 'milestone-1'
+    )
+      ? 'synthetic_demo'
+      : 'real_telemetry',
   };
   mapped.status = deriveAgentHealthStatus(mapped);
   return mapped;
@@ -88,6 +93,21 @@ function mapTokenRow(
 }
 
 function mapEventRow(row: typeof sentinelEvents.$inferSelect): SentinelEventRecord {
+  const provenance = safeJsonParse<SentinelEventRecord['provenance']>(row.provenanceJson, {
+    agentId: row.agentId,
+    agentVersion: SENTINEL_VERSION,
+    hostname: row.hostname,
+    region: row.region,
+    collector: 'sentinel-collector',
+    receivedAtIso: row.ingestedAt.toISOString(),
+    bufferedOffline: false,
+    retryAttempt: 0,
+    redactedFields: [],
+    dataOrigin: 'real_telemetry',
+  });
+  if (!provenance.dataOrigin) {
+    provenance.dataOrigin = provenance.simulatedDrill ? 'synthetic_demo' : 'real_telemetry';
+  }
   return {
     id: row.id,
     agentId: row.agentId,
@@ -99,23 +119,65 @@ function mapEventRow(row: typeof sentinelEvents.$inferSelect): SentinelEventReco
     occurrenceCount: row.occurrenceCount,
     summary: row.summary,
     payload: safeJsonParse<Record<string, unknown>>(row.payloadJson, {}),
-    provenance: safeJsonParse(row.provenanceJson, {
-      agentId: row.agentId,
-      agentVersion: SENTINEL_VERSION,
-      hostname: row.hostname,
-      region: row.region,
-      collector: 'sentinel-collector',
-      receivedAtIso: row.ingestedAt.toISOString(),
-      bufferedOffline: false,
-      retryAttempt: 0,
-      redactedFields: [],
-    }),
+    provenance,
+    dataOrigin: provenance.dataOrigin,
     observedAt: row.observedAt.toISOString(),
     ingestedAt: row.ingestedAt.toISOString(),
   };
 }
 
+interface StoredHypothesesEnvelope {
+  __v: 2;
+  hypotheses: SentinelIncidentRecord['hypotheses'];
+  confirmedFacts?: string[];
+  unknowns?: string[];
+  playbookId?: SentinelIncidentRecord['playbookId'];
+  dataOrigin?: SentinelIncidentRecord['dataOrigin'];
+}
+
+function encodeHypothesesEnvelope(
+  incident: Pick<
+    SentinelIncidentRecord,
+    'hypotheses' | 'confirmedFacts' | 'unknowns' | 'playbookId' | 'dataOrigin'
+  >
+): string {
+  const envelope: StoredHypothesesEnvelope = {
+    __v: 2,
+    hypotheses: incident.hypotheses || [],
+    confirmedFacts: incident.confirmedFacts,
+    unknowns: incident.unknowns,
+    playbookId: incident.playbookId,
+    dataOrigin: incident.dataOrigin,
+  };
+  return JSON.stringify(envelope);
+}
+
+function decodeHypothesesEnvelope(raw: string): {
+  hypotheses: SentinelIncidentRecord['hypotheses'];
+  confirmedFacts?: string[];
+  unknowns?: string[];
+  playbookId?: SentinelIncidentRecord['playbookId'];
+  dataOrigin?: SentinelIncidentRecord['dataOrigin'];
+} {
+  const parsed = safeJsonParse<unknown>(raw, []);
+  if (Array.isArray(parsed)) {
+    return { hypotheses: parsed as SentinelIncidentRecord['hypotheses'] };
+  }
+  if (parsed && typeof parsed === 'object' && 'hypotheses' in parsed) {
+    const env = parsed as StoredHypothesesEnvelope;
+    return {
+      hypotheses: Array.isArray(env.hypotheses) ? env.hypotheses : [],
+      confirmedFacts: Array.isArray(env.confirmedFacts) ? env.confirmedFacts : undefined,
+      unknowns: Array.isArray(env.unknowns) ? env.unknowns : undefined,
+      playbookId: env.playbookId,
+      dataOrigin: env.dataOrigin,
+    };
+  }
+  return { hypotheses: [] };
+}
+
 function mapIncidentRow(row: typeof sentinelIncidents.$inferSelect): SentinelIncidentRecord {
+  const decoded = decodeHypothesesEnvelope(row.hypothesesJson);
   return {
     id: row.id,
     title: row.title,
@@ -126,7 +188,11 @@ function mapIncidentRow(row: typeof sentinelIncidents.$inferSelect): SentinelInc
     affectedAgentIds: safeJsonParse(row.affectedAgentIdsJson, []),
     evidenceEventIds: safeJsonParse(row.evidenceEventIdsJson, []),
     mitreTechniques: safeJsonParse(row.mitreTechniquesJson, []),
-    hypotheses: safeJsonParse(row.hypothesesJson, []),
+    hypotheses: decoded.hypotheses,
+    confirmedFacts: decoded.confirmedFacts,
+    unknowns: decoded.unknowns,
+    playbookId: decoded.playbookId,
+    dataOrigin: decoded.dataOrigin,
     timeline: safeJsonParse(row.timelineJson, []),
     investigationReport: row.investigationReport,
     confidenceScore: row.confidenceScore,
@@ -653,7 +719,7 @@ export async function createOrUpdateSentinelIncident(
         affectedAgentIdsJson: JSON.stringify(incident.affectedAgentIds),
         evidenceEventIdsJson: JSON.stringify(incident.evidenceEventIds),
         mitreTechniquesJson: JSON.stringify(incident.mitreTechniques),
-        hypothesesJson: JSON.stringify(incident.hypotheses),
+        hypothesesJson: encodeHypothesesEnvelope(incident),
         timelineJson: JSON.stringify(incident.timeline),
         investigationReport: incident.investigationReport,
         confidenceScore: Math.max(0, Math.min(100, Math.round(incident.confidenceScore))),
@@ -667,7 +733,7 @@ export async function createOrUpdateSentinelIncident(
           severity: incident.severity,
           status: incident.status,
           mitreTechniquesJson: JSON.stringify(incident.mitreTechniques),
-          hypothesesJson: JSON.stringify(incident.hypotheses),
+          hypothesesJson: encodeHypothesesEnvelope(incident),
           timelineJson: JSON.stringify(incident.timeline),
           investigationReport: incident.investigationReport,
           confidenceScore: Math.max(0, Math.min(100, Math.round(incident.confidenceScore))),

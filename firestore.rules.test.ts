@@ -249,8 +249,9 @@ test('firestore.rules structural invariants match firebase-blueprint.json', () =
   assert.ok(rulesSource.includes('match /techAnalyses/{analysisId}'));
   assert.ok(rulesSource.includes('match /cveAdvisories/{advisoryId}'));
   assert.ok(rulesSource.includes('match /researchMonitors/{monitorId}'));
+  assert.ok(rulesSource.includes('match /sentinelHeartbeats/{heartbeatId}'));
 
-  // Verify blueprint has all 13 entities (6 v0.1 + 4 GIN v0.2 + 3 GRI v0.5)
+  // Verify blueprint has all 14 entities (6 v0.1 + 4 GIN v0.2 + 3 GRI v0.5 + 1 Sentinel v0.6)
   assert.deepEqual(Object.keys(blueprint.entities).sort(), [
     'AuditEvent',
     'BehaviourInsight',
@@ -262,6 +263,7 @@ test('firestore.rules structural invariants match firebase-blueprint.json', () =
     'PrivateAccount',
     'ResearchMonitor',
     'ResearchReport',
+    'SentinelHeartbeat',
     'TaskRecord',
     'TechAnalysis',
     'UserProfile',

@@ -1,4 +1,5 @@
 import type {
+  DataOrigin,
   DefensiveActionType,
   IncidentTimelineEntry,
   MitreTechniqueMapping,
@@ -135,6 +136,7 @@ export interface RawSentinelEventInput {
   bufferedOffline?: boolean;
   retryAttempt?: number;
   simulatedDrill?: boolean;
+  dataOrigin?: DataOrigin;
 }
 
 export interface AgentProvenanceContext {
@@ -197,6 +199,11 @@ export function normalizeSentinelEvent(
 
   const fingerprint = stableFingerprint(fpSource);
 
+  const dataOrigin: DataOrigin =
+    raw.dataOrigin === 'synthetic_demo' || raw.simulatedDrill
+      ? 'synthetic_demo'
+      : 'real_telemetry';
+
   return {
     agentId: agent.agentId,
     region: agent.region,
@@ -217,8 +224,10 @@ export function normalizeSentinelEvent(
       bufferedOffline: Boolean(raw.bufferedOffline),
       retryAttempt: Math.max(0, Math.min(20, Number(raw.retryAttempt || 0))),
       redactedFields,
+      dataOrigin,
       ...(raw.simulatedDrill ? { simulatedDrill: true } : {}),
     },
+    dataOrigin,
     observedAt,
     ingestedAt: nowIso,
   };

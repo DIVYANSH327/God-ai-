@@ -260,3 +260,113 @@ test('deriveAgentHealthStatus respects revoked/isolated state and flags stale he
     'offline'
   );
 });
+
+import {
+  SENTINEL_INVESTIGATION_PLAYBOOKS,
+  buildFiveMinuteHeartbeatWindow,
+  buildHeartbeatPulsePath,
+  classifyHeartbeatPingHealth,
+  deriveHeartbeatHealthTransitions,
+} from './sentinelPlaybooks.ts';
+import type { SentinelHeartbeatPing } from './sentinelTypes.ts';
+
+test('SENTINEL_INVESTIGATION_PLAYBOOKS covers all 10 required threat playbooks', () => {
+  const ids = new Set(SENTINEL_INVESTIGATION_PLAYBOOKS.map((p) => p.id));
+  for (const required of [
+    'phishing',
+    'ransomware',
+    'credential_stuffing',
+    'brute_force',
+    'malware',
+    'sql_injection',
+    'xss',
+    'ddos',
+    'mitm',
+    'account_takeover',
+  ]) {
+    assert.ok(ids.has(required as never), `Missing playbook: ${required}`);
+  }
+  assert.equal(SENTINEL_INVESTIGATION_PLAYBOOKS.length, 10);
+});
+
+test('5-minute heartbeat bucketing classifies green/yellow/red pings and generates ECG SVG path', () => {
+  const now = 1_795_350_000_000;
+  assert.equal(
+    classifyHeartbeatPingHealth({ cpuPercent: 25, ramPercent: 40, diskPercent: 30, loadAvg1: 0.4, latencyMs: 45 }),
+    'healthy'
+  );
+  assert.equal(
+    classifyHeartbeatPingHealth({ cpuPercent: 76, ramPercent: 60, diskPercent: 50, loadAvg1: 1.5, latencyMs: 80 }),
+    'warning'
+  );
+  assert.equal(
+    classifyHeartbeatPingHealth({ cpuPercent: 93, ramPercent: 85, diskPercent: 70, loadAvg1: 6.5, latencyMs: 120 }),
+    'critical'
+  );
+
+  const pings: SentinelHeartbeatPing[] = [
+    {
+      id: 'hb-1',
+      agentId: 'srv-1',
+      hostname: 'sg-01',
+      region: 'asia-southeast1',
+      health: 'healthy',
+      cpuPercent: 24,
+      ramPercent: 41,
+      diskPercent: 35,
+      loadAvg1: 0.4,
+      latencyMs: 38,
+      observedAt: new Date(now - 240_000).toISOString(),
+      dataOrigin: 'real_telemetry',
+      transport: 'https_controller',
+    },
+    {
+      id: 'hb-2',
+      agentId: 'srv-1',
+      hostname: 'sg-01',
+      region: 'asia-southeast1',
+      health: 'warning',
+      cpuPercent: 75,
+      ramPercent: 70,
+      diskPercent: 42,
+      loadAvg1: 2.8,
+      latencyMs: 210,
+      observedAt: new Date(now - 60_000).toISOString(),
+      dataOrigin: 'real_telemetry',
+      transport: 'firestore_sync',
+    },
+    {
+      id: 'hb-3',
+      agentId: 'srv-1',
+      hostname: 'sg-01',
+      region: 'asia-southeast1',
+      health: 'critical',
+      cpuPercent: 94,
+      ramPercent: 91,
+      diskPercent: 60,
+      loadAvg1: 7.2,
+      latencyMs: 920,
+      observedAt: new Date(now - 5_000).toISOString(),
+      dataOrigin: 'real_telemetry',
+      transport: 'firestore_sync',
+    },
+  ];
+
+  const slots = buildFiveMinuteHeartbeatWindow(pings, now, 20, 300);
+  assert.equal(slots.length, 20);
+  assert.equal(slots.filter((s) => s.pingCount > 0).length, 3);
+  assert.equal(slots[19].health, 'critical');
+
+  const path = buildHeartbeatPulsePath(slots, 640, 84);
+  assert.ok(path.startsWith('M 0 '));
+  assert.ok(path.includes('L 640.0'));
+
+  const transitions = deriveHeartbeatHealthTransitions(slots);
+  assert.equal(transitions.length, 2);
+  assert.equal(transitions[0].fromHealth, 'healthy');
+  assert.equal(transitions[0].toHealth, 'warning');
+  assert.equal(transitions[0].direction, 'degrading');
+  assert.equal(transitions[1].fromHealth, 'warning');
+  assert.equal(transitions[1].toHealth, 'critical');
+  assert.equal(transitions[1].direction, 'degrading');
+});

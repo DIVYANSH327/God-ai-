@@ -110,7 +110,7 @@ const CommandCenterShell: React.FC = () => {
     return (
       <div className="min-h-screen bg-[#090b10] text-slate-200 flex flex-col items-center justify-center gap-4">
         <NeuralCoreOrb emergencyStop={false} size="md" />
-        <p className="text-sm font-mono text-slate-400">Initializing AI GOD (GRI v0.5)...</p>
+        <p className="text-sm font-mono text-slate-400">Initializing AI GOD (GOD-X v0.6.0)...</p>
       </div>
     );
   }
@@ -178,7 +178,7 @@ const CommandCenterShell: React.FC = () => {
               AI GOD (GOD-X)
             </span>
             <span className="block text-[11px] font-mono text-slate-500">
-              GRI v0.5 · SENTINEL v0.8
+              GOD-X v0.6.0 · GRI · SENTINEL
             </span>
           </div>
         </div>
@@ -186,7 +186,7 @@ const CommandCenterShell: React.FC = () => {
         <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-4">
           <div className="space-y-1">
             <p className="px-3 text-[11px] font-medium text-slate-500">
-              Server Defense (SENTINEL v0.8)
+              Server Defense (SENTINEL v0.6)
             </p>
             {sentinelNavItems.map(renderNavButton)}
           </div>
@@ -245,7 +245,7 @@ const CommandCenterShell: React.FC = () => {
           <div className="relative z-10 w-72 max-w-[85vw] bg-[#0b0e15] border-r border-white/[0.1] flex flex-col h-full">
             <div className="px-4 py-4 border-b border-white/[0.08] flex items-center justify-between">
               <span className="text-base font-bold text-white font-display">
-                AI GOD · GRI v0.5
+                AI GOD · GOD-X v0.6.0
               </span>
               <button
                 type="button"
@@ -259,7 +259,7 @@ const CommandCenterShell: React.FC = () => {
             <nav className="flex-1 overflow-y-auto p-3 space-y-3">
               <div className="space-y-1">
                 <p className="px-3 text-[11px] font-medium text-slate-500">
-                  Server Defense (SENTINEL v0.8)
+                  Server Defense (SENTINEL v0.6)
                 </p>
                 {sentinelNavItems.map(renderNavButton)}
               </div>

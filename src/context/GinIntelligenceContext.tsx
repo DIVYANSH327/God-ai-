@@ -97,8 +97,9 @@ interface GinIntelligenceContextValue {
     sourceTitle: string;
     sourceUri: string;
     confidenceScore: number;
+    confidenceExplanation?: string;
     relations?: KnowledgeRelation[];
-  }) => Promise<{ ok: boolean; error?: string }>;
+  }) => Promise<{ ok: boolean; error?: string; conflictDetected?: string }>;
   linkKnowledgeNodes: (
     sourceId: string,
     targetId: string,
@@ -645,6 +646,10 @@ export function GinIntelligenceProvider({ children }: { children: React.ReactNod
               sourceTitle: String(d.sourceTitle || 'Operator Entry'),
               sourceUri: String(d.sourceUri || ''),
               confidenceScore: Number(d.confidenceScore || 0),
+              confidenceExplanation:
+                typeof d.confidenceExplanation === 'string' && d.confidenceExplanation.trim()
+                  ? d.confidenceExplanation
+                  : undefined,
               relations: Array.isArray(d.relations)
                 ? (d.relations as KnowledgeRelation[])
                 : [],
@@ -1185,6 +1190,7 @@ export function GinIntelligenceProvider({ children }: { children: React.ReactNod
       sourceTitle: string;
       sourceUri: string;
       confidenceScore: number;
+      confidenceExplanation?: string;
       relations?: KnowledgeRelation[];
     }) => {
       const label = sanitizeBoundedString(input.label, GIN_SCHEMA_LIMITS.LABEL_MAX);
@@ -1199,7 +1205,37 @@ export function GinIntelligenceProvider({ children }: { children: React.ReactNod
 
       const safeUri = rawUri.slice(0, GIN_SCHEMA_LIMITS.URI_MAX);
       const safeConf = Math.min(100, Math.max(0, Math.round(Number(input.confidenceScore) || 80)));
-      const safeRelations = (input.relations || []).slice(0, 20);
+
+      // Non-destructive contradiction check: never silently overwrite an existing entity with a conflicting claim.
+      const normalizedLabel = label.toLowerCase();
+      const normalizedClaim = claim.toLowerCase();
+      const conflictingExisting = knowledgeNodes.filter(
+        (existing) =>
+          existing.label.trim().toLowerCase() === normalizedLabel &&
+          existing.claim.trim().toLowerCase() !== normalizedClaim
+      );
+
+      const autoConflictRelations: KnowledgeRelation[] = conflictingExisting.map((existing) => ({
+        targetId: existing.id,
+        targetLabel: existing.label,
+        predicate: 'contradicts',
+      }));
+
+      const mergedRelations = [...(input.relations || []), ...autoConflictRelations].slice(0, 20);
+      const autoConfidenceExplanation = sanitizeBoundedString(
+        input.confidenceExplanation?.trim() ||
+          `${safeConf}% calibrated from "${sourceTitle}"${safeUri ? ' with verifiable external source URI' : ' (operator-supplied source without URI)'}${
+            conflictingExisting.length > 0
+              ? `; preserved alongside ${conflictingExisting.length} conflicting prior observation(s)`
+              : ''
+          }.`,
+        240
+      );
+
+      const conflictMessage =
+        conflictingExisting.length > 0
+          ? `Conflicting observation preserved without overwriting "${label}" (${conflictingExisting.length} existing claim kept and linked via [contradicts]).`
+          : undefined;
 
       if (!firebaseUser) {
         const now = Date.now();
@@ -1212,24 +1248,31 @@ export function GinIntelligenceProvider({ children }: { children: React.ReactNod
           sourceTitle,
           sourceUri: safeUri,
           confidenceScore: safeConf,
-          relations: safeRelations,
+          confidenceExplanation: autoConfidenceExplanation,
+          relations: mergedRelations,
           createdAtMs: now,
           updatedAtMs: now,
         };
         setPreviewNodes((prev) => [node, ...prev]);
         await recordAuditEvent({
-          action: 'KNOWLEDGE_NODE_ADDED',
+          action:
+            conflictingExisting.length > 0
+              ? 'KNOWLEDGE_CONFLICT_PRESERVED'
+              : 'KNOWLEDGE_NODE_ADDED',
           category: 'knowledge',
-          severity: 'info',
-          summary: `Added Knowledge Graph entity "${label}" (${input.entityType}, ${safeConf}% confidence).`,
+          severity: conflictingExisting.length > 0 ? 'warning' : 'info',
+          summary:
+            conflictMessage ||
+            `Added Knowledge Graph entity "${label}" (${input.entityType}, ${safeConf}% confidence).`,
         });
-        return { ok: true };
+        return { ok: true, conflictDetected: conflictMessage };
       }
 
       const uid = firebaseUser.uid;
       const nodeId = createSafeId('kn');
       const path = `users/${uid}/knowledgeNodes/${nodeId}`;
       try {
+        // Keep exact Firestore rule schema fields (no unapproved extra keys in Firestore doc if rules are strict)
         await setDoc(doc(db, 'users', uid, 'knowledgeNodes', nodeId), {
           id: nodeId,
           userId: uid,
@@ -1239,22 +1282,27 @@ export function GinIntelligenceProvider({ children }: { children: React.ReactNod
           sourceTitle,
           sourceUri: safeUri,
           confidenceScore: safeConf,
-          relations: safeRelations,
+          relations: mergedRelations,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         });
         await recordAuditEvent({
-          action: 'KNOWLEDGE_NODE_ADDED',
+          action:
+            conflictingExisting.length > 0
+              ? 'KNOWLEDGE_CONFLICT_PRESERVED'
+              : 'KNOWLEDGE_NODE_ADDED',
           category: 'knowledge',
-          severity: 'info',
-          summary: `Committed Knowledge Graph node "${label}" (${input.entityType}) to Cloud Firestore.`,
+          severity: conflictingExisting.length > 0 ? 'warning' : 'info',
+          summary:
+            conflictMessage ||
+            `Committed Knowledge Graph node "${label}" (${input.entityType}) to Cloud Firestore.`,
         });
-        return { ok: true };
+        return { ok: true, conflictDetected: conflictMessage };
       } catch (err) {
         handleFirestoreError(err, OperationType.CREATE, path);
       }
     },
-    [firebaseUser, recordAuditEvent]
+    [firebaseUser, knowledgeNodes, recordAuditEvent]
   );
 
   const linkKnowledgeNodes = useCallback(

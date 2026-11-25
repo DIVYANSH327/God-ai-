@@ -1,6 +1,8 @@
-export const SENTINEL_VERSION = '0.8.0';
+export const SENTINEL_VERSION = '0.6.0';
 
 export type SentinelOsType = 'linux' | 'windows';
+
+export type DataOrigin = 'real_telemetry' | 'synthetic_demo';
 
 export type SentinelAgentStatus =
   | 'online'
@@ -36,6 +38,36 @@ export type ApprovalActionStatus =
   | 'rejected'
   | 'executed';
 
+export type PlaybookId =
+  | 'phishing'
+  | 'ransomware'
+  | 'credential_stuffing'
+  | 'brute_force'
+  | 'malware'
+  | 'sql_injection'
+  | 'xss'
+  | 'ddos'
+  | 'mitm'
+  | 'account_takeover';
+
+export type HeartbeatPingHealth = 'healthy' | 'warning' | 'critical' | 'missed';
+
+export interface SentinelHeartbeatPing {
+  id: string;
+  agentId: string;
+  hostname: string;
+  region: string;
+  health: HeartbeatPingHealth;
+  cpuPercent: number;
+  ramPercent: number;
+  diskPercent: number;
+  loadAvg1: number;
+  latencyMs: number;
+  observedAt: string;
+  dataOrigin: DataOrigin;
+  transport: 'https_controller' | 'firestore_sync' | 'preview_simulation';
+}
+
 export interface SentinelServiceStatus {
   name: string;
   state: 'running' | 'stopped' | 'degraded';
@@ -70,6 +102,7 @@ export interface SentinelAgentRecord {
   lastHeartbeatAt: string | null;
   enrolledAt: string;
   revokedAt: string | null;
+  dataOrigin?: DataOrigin;
 }
 
 export interface SentinelEnrollmentTokenRecord {
@@ -96,6 +129,7 @@ export interface SentinelEventProvenance {
   retryAttempt: number;
   redactedFields: string[];
   simulatedDrill?: boolean;
+  dataOrigin?: DataOrigin;
 }
 
 export interface SentinelEventRecord {
@@ -110,6 +144,7 @@ export interface SentinelEventRecord {
   summary: string;
   payload: Record<string, unknown>;
   provenance: SentinelEventProvenance;
+  dataOrigin?: DataOrigin;
   observedAt: string;
   ingestedAt: string;
 }
@@ -154,6 +189,10 @@ export interface SentinelIncidentRecord {
   evidenceEventIds: string[];
   mitreTechniques: MitreTechniqueMapping[];
   hypotheses: InvestigationHypothesis[];
+  confirmedFacts?: string[];
+  unknowns?: string[];
+  playbookId?: PlaybookId;
+  dataOrigin?: DataOrigin;
   timeline: IncidentTimelineEntry[];
   investigationReport: string;
   confidenceScore: number;

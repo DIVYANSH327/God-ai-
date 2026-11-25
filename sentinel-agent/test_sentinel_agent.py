@@ -6,14 +6,39 @@ from god_sentinel_agent import (
     OfflineEventBuffer,
     build_simulated_suspicious_drill_events,
     check_file_integrity,
+    collect_system_metrics,
     diff_process_snapshots,
     parse_auth_log_lines,
     parse_proc_net_tcp_hex_addr,
     redact_payload,
+    validate_controller_url,
 )
 
 
 class SentinelMicroAgentTests(unittest.TestCase):
+    def test_validate_controller_url_enforces_https_in_production(self) -> None:
+        self.assertEqual(
+            validate_controller_url("https://god.example.com/"),
+            "https://god.example.com",
+        )
+        with self.assertRaises(ValueError):
+            validate_controller_url("http://god.example.com")
+        with self.assertRaises(ValueError):
+            validate_controller_url("http://127.0.0.1:3000", allow_insecure_localhost=False)
+        self.assertEqual(
+            validate_controller_url("http://127.0.0.1:3000/", allow_insecure_localhost=True),
+            "http://127.0.0.1:3000",
+        )
+
+    def test_collect_system_metrics_includes_load_average(self) -> None:
+        metrics = collect_system_metrics()
+        self.assertIn("cpuPercent", metrics)
+        self.assertIn("ramPercent", metrics)
+        self.assertIn("diskPercent", metrics)
+        self.assertIn("loadAvg1", metrics)
+        self.assertGreaterEqual(metrics["cpuPercent"], 0)
+        self.assertLessEqual(metrics["cpuPercent"], 100)
+
     def test_redact_payload_removes_credentials_and_secrets(self) -> None:
         raw = {
             "username": "ops-user",
@@ -42,6 +67,7 @@ class SentinelMicroAgentTests(unittest.TestCase):
             self.assertEqual(len(events2), 1)
             self.assertEqual(events2[0]["eventType"], "fim")
             self.assertEqual(events2[0]["severity"], "high")
+            self.assertEqual(events2[0]["dataOrigin"], "real_telemetry")
 
     def test_offline_buffer_persists_and_clears(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -64,6 +90,7 @@ class SentinelMicroAgentTests(unittest.TestCase):
         diff = diff_process_snapshots(prev, curr)
         self.assertEqual(len(diff), 1)
         self.assertEqual(diff[0]["payload"]["action"], "created")
+        self.assertEqual(diff[0]["dataOrigin"], "real_telemetry")
 
         ip, port = parse_proc_net_tcp_hex_addr("0100007F:01BB")
         self.assertEqual(ip, "127.0.0.1")
@@ -82,6 +109,7 @@ class SentinelMicroAgentTests(unittest.TestCase):
         drill = build_simulated_suspicious_drill_events("sg-prod-01")
         self.assertEqual(len(drill), 4)
         self.assertTrue(all(ev.get("simulatedDrill") for ev in drill))
+        self.assertTrue(all(ev.get("dataOrigin") == "synthetic_demo" for ev in drill))
 
 
 if __name__ == "__main__":

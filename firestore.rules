@@ -249,7 +249,7 @@ service cloud.firestore {
         isValidId(data.userId) &&
         data.action is string && data.action.size() >= 1 && data.action.size() <= 80 &&
         data.category is string && data.category.size() <= 24 &&
-        (data.category == 'auth' || data.category == 'chat' || data.category == 'security' || data.category == 'settings' || data.category == 'memory' || data.category == 'task' || data.category == 'network' || data.category == 'research' || data.category == 'knowledge' || data.category == 'behaviour') &&
+        (data.category == 'auth' || data.category == 'chat' || data.category == 'security' || data.category == 'sentinel' || data.category == 'settings' || data.category == 'memory' || data.category == 'task' || data.category == 'network' || data.category == 'research' || data.category == 'knowledge' || data.category == 'behaviour') &&
         data.severity is string && data.severity.size() <= 16 &&
         (data.severity == 'info' || data.severity == 'warning' || data.severity == 'critical') &&
         data.summary is string && data.summary.size() >= 1 && data.summary.size() <= 320 &&
@@ -596,6 +596,57 @@ service cloud.firestore {
         data.lastRunAtMs is number && data.lastRunAtMs >= 0 &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp;
+    }
+
+    // Validation Blueprint 14: GOD Sentinel v0.6.0 Real-Time Heartbeat Ping
+    function isValidSentinelHeartbeat(data, heartbeatId) {
+      return data.keys().hasAll([
+          'id',
+          'userId',
+          'agentId',
+          'hostname',
+          'region',
+          'health',
+          'cpuPercent',
+          'ramPercent',
+          'diskPercent',
+          'loadAvg1',
+          'latencyMs',
+          'dataOrigin',
+          'observedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id',
+          'userId',
+          'agentId',
+          'hostname',
+          'region',
+          'health',
+          'cpuPercent',
+          'ramPercent',
+          'diskPercent',
+          'loadAvg1',
+          'latencyMs',
+          'dataOrigin',
+          'observedAt'
+        ]) &&
+        data.id == heartbeatId &&
+        isValidId(data.id) &&
+        data.userId == request.auth.uid &&
+        isValidId(data.userId) &&
+        isValidId(data.agentId) &&
+        data.hostname is string && data.hostname.size() >= 1 && data.hostname.size() <= 120 &&
+        data.region is string && data.region.size() >= 1 && data.region.size() <= 64 &&
+        data.health is string && data.health.size() <= 16 &&
+        (data.health == 'healthy' || data.health == 'warning' || data.health == 'critical') &&
+        data.cpuPercent is int && data.cpuPercent >= 0 && data.cpuPercent <= 100 &&
+        data.ramPercent is int && data.ramPercent >= 0 && data.ramPercent <= 100 &&
+        data.diskPercent is int && data.diskPercent >= 0 && data.diskPercent <= 100 &&
+        data.loadAvg1 is number && data.loadAvg1 >= 0 && data.loadAvg1 <= 1000 &&
+        data.latencyMs is int && data.latencyMs >= 0 && data.latencyMs <= 60000 &&
+        data.dataOrigin is string && data.dataOrigin.size() <= 24 &&
+        (data.dataOrigin == 'real_telemetry' || data.dataOrigin == 'synthetic_demo') &&
+        data.observedAt is timestamp;
     }
 
     // Root User Workspace Profile
@@ -1026,6 +1077,32 @@ service cloud.firestore {
         allow delete: if isVerifiedOwner(userId) &&
           isValidId(userId) &&
           isValidId(monitorId) &&
+          existing().userId == request.auth.uid &&
+          exists(/databases/$(database)/documents/users/$(userId));
+      }
+
+      // GOD Sentinel v0.6.0: Real-Time Server Health Heartbeat Pings
+      match /sentinelHeartbeats/{heartbeatId} {
+        allow get: if isOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(heartbeatId) &&
+          existing().userId == request.auth.uid &&
+          exists(/databases/$(database)/documents/users/$(userId));
+
+        allow list: if isOwner(userId) &&
+          existing().userId == request.auth.uid;
+
+        allow create: if isVerifiedOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(heartbeatId) &&
+          isValidSentinelHeartbeat(incoming(), heartbeatId) &&
+          userExistsOrCreating(userId);
+
+        allow update: if false;
+
+        allow delete: if isVerifiedOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(heartbeatId) &&
           existing().userId == request.auth.uid &&
           exists(/databases/$(database)/documents/users/$(userId));
       }

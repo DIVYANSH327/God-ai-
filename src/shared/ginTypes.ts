@@ -83,6 +83,7 @@ export interface KnowledgeNodeRecord {
   sourceTitle: string;
   sourceUri: string;
   confidenceScore: number;
+  confidenceExplanation?: string;
   relations: KnowledgeRelation[];
   createdAtMs: number;
   updatedAtMs: number;

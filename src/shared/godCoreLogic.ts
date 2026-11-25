@@ -9,7 +9,7 @@ import type {
 import { SCHEMA_LIMITS, sanitizeBoundedString } from './validation.ts';
 
 export const GOD_CORE_MODEL = 'gemini-4-hydrogen';
-export const GOD_CORE_VERSION = '0.5.0';
+export const GOD_CORE_VERSION = '0.6.0';
 
 export const AGENT_REGISTRY: readonly AgentDefinition[] = [
   {
